@@ -73,12 +73,32 @@ export function applyBoundaryRule(text, masked) {
 
     // 右侧不是 CJK 时,看左侧近距离(50 字内)有没有 CJK
     // 处理 `**中文**:English` 这种"中文加粗后接半角再接英文"的常见模式
+    //
+    // F1 修订(限制回看,避免跨段 / 穿过长 mask 区误改):
+    //   - 遇 \n\n(空行 = 段落边界)立即停
+    //   - 累计跨过的 \x00 (代码块/URL/script 等)字符 > 10 → 停
+    //   - 累计跨过的换行 > 1 → 停(避免跨多行未空行的相邻 lines)
     let leftHasNearbyCjk = false
     if (!rightIsCjk) {
       const lookback = Math.max(0, i - 50)
+      let maskedCrossed = 0
+      let newlineCrossed = 0
+      let prevWasNewline = false
       for (let j = i - 1; j >= lookback; j--) {
         const c = maskedChars[j]
-        if (c === '\x00') continue  // 穿过 mask 区继续找
+        if (c === '\n') {
+          if (prevWasNewline) break  // \n\n 段落边界
+          prevWasNewline = true
+          newlineCrossed++
+          if (newlineCrossed > 1) break
+          continue
+        }
+        prevWasNewline = false
+        if (c === '\x00') {
+          maskedCrossed++
+          if (maskedCrossed > 10) break
+          continue
+        }
         if (CJK.test(c)) { leftHasNearbyCjk = true; break }
       }
     }

@@ -8,7 +8,7 @@
 
 **这是什么**：Claude Code 写中文文档 (`.md`/`.html`) 时，自动把里面的半角标点换成全角。
 
-**前提**：你用 [Claude Code](https://claude.com/claude-code)。不用 Claude Code 的话，这工具不会自动触发 (可以手动 `node tool/zh-fix.mjs <file>`，但意义不大)。
+**前提**：你用 [Claude Code](https://claude.com/claude-code)。不用 Claude Code 的话，这工具不会自动触发 (可以手动 `node tool/zh-fix.mjs <file>`,但意义不大)。
 
 ```
 before: 你好,世界.这是一个测试,带边界(英文),还有.
@@ -17,29 +17,26 @@ after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 
 **怎么安装**：把下面这句话发给你的 AI agent:
 
-> 帮我装一下 https://github.com/huangko555/zh-fix,按 AGENTS.md 来，装好告诉我怎么用
+> 帮我装一下 https://github.com/huangko555/zh-fix,按 AGENTS.md 来,装好告诉我怎么用
 
-**如何使用**：装完重启 Claude Code,**什么都不用做**。继续正常写文档，工具在后台跑。
+**如何使用**：装完重启 Claude Code, **正常情况下完全不用管** ——每次写完 `.md` / `.html`,hook 在后台自动跑完。
 
-**常用命令**：
-
-**终端命令**(装好后任意位置可用):
+如有需要,以下命令可以主动用:
 
 ```
-zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动
-zhfix pause      当前目录不想被处理(英文文档/代码示例等)
-zhfix resume     恢复处理
-zhfix uninstall  卸载
+# Claude Code 里(对已有文件主动跑一次,改前自动备份)
+/zhfix <文件>            说"改 prd.md 的标点"这种自然语言也会触发
+
+# 终端(任意位置)
+zhfix status            看 hook 是否启用 + 当前目录是否暂停 + 今日活动
+zhfix pause             当前目录暂停(写英文文档或代码示例时)
+zhfix resume            恢复
+zhfix uninstall         卸载(加 --all 还会卸 autocorrect 和清日志)
 ```
 
-**Claude Code 斜杠命令**(在 Claude Code 里):
+完整命令清单 `zhfix help`(还有 `restore` `clear-backups` 等不常用的)。
 
-```
-/zhfix <文件>           把单个 .md/.html 用 zh-fix 规则改一遍
-                       (改前自动备份;说"改 prd.md 的标点"也会主动触发)
-```
-
-> 出问题了？→ 见 [`tool/EMERGENCY-OFF.md`](tool/EMERGENCY-OFF.md)，或直接 `zhfix uninstall`。
+> 出问题了？→ 见 [`tool/EMERGENCY-OFF.md`](tool/EMERGENCY-OFF.md),或直接 `zhfix uninstall`。
 
 ---
 
@@ -84,13 +81,17 @@ node install/install.mjs
 ## zhfix 命令
 
 ```
-zhfix init [tool 路径]   重新绑定 tool 路径(搬目录 / 修配置时用)
-zhfix pause              暂停当前目录(及子目录)
-zhfix resume             恢复当前目录
-zhfix status             看配置 / 暂停列表 / 今日活动
-zhfix uninstall          卸载(不动 autocorrect 和 tool 源)
-zhfix help               帮助
+zhfix init [tool 路径]           重新绑定 tool 路径(搬目录 / 修配置时用)
+zhfix pause                      暂停当前目录(及子目录)
+zhfix resume                     恢复当前目录
+zhfix status                     看配置 / 暂停列表 / 今日活动
+zhfix restore <文件>             还原指定文件到上次 /zhfix 改之前的备份
+zhfix clear-backups [--yes]      清掉所有"普通备份"(pre-restore 默认保留)
+zhfix uninstall [--all]          卸载;--all 还会卸 autocorrect + 清日志和备份配置
+zhfix help                       帮助
 ```
+
+> **`zhfix uninstall` 默认会删 `~/.zhfix/`,里面的备份会一起没**。如果想保留某些备份做长期归档,提前 `cp` 出来。
 
 ### `zhfix init` 是干啥的
 

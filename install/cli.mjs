@@ -7,10 +7,36 @@
 process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.code !== 'DEP0190') console.warn(w) })
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync, appendFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
+import { createHash } from 'node:crypto'
+
+// ============================================================================
+// 公共工具(给备份命名/时间戳用)
+// ============================================================================
+
+// F5 修:时间戳带毫秒,避免秒级冲突
+function makeTimestamp() {
+  const d = new Date()
+  const Y = d.getFullYear()
+  const M = String(d.getMonth() + 1).padStart(2, '0')
+  const D = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  const s = String(d.getSeconds()).padStart(2, '0')
+  const ms = String(d.getMilliseconds()).padStart(3, '0')
+  return `${Y}${M}${D}-${h}${m}${s}-${ms}`
+}
+
+// F9 修:用 SHA1 hash + basename,避免路径编码碰撞
+//   `D:\a_b\c.md` 和 `D:\a\b_c.md` 之前都编成同样的下划线串,这里靠 hash 区分
+//   basename 留在文件名里方便 ls 时认出原文件
+function encodePathForBackup(absPath) {
+  const hash = createHash('sha1').update(absPath).digest('hex').slice(0, 8)
+  return `${hash}.${basename(absPath)}`
+}
 
 const IS_WIN = process.platform === 'win32'
 const HOME = homedir()
@@ -341,15 +367,27 @@ function cmdUninstall(args) {
 
   // --all:一并卸独立组件
   if (all) {
-    // autocorrect-node 全局 npm 包
-    info('卸 autocorrect-node 全局 npm 包...')
-    const npmRes = IS_WIN
-      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', 'uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
-      : spawnSync('npm', ['uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
-    if (npmRes.status === 0) {
-      removed.push('autocorrect-node(npm 全局包)')
+    // F4 修:先用 npm ls 探测是否真装了,避免"本来没装"的情况误报"已卸"
+    info('探测 autocorrect-node 是否已装...')
+    const lsArgs = ['ls', '-g', '--depth=0', 'autocorrect-node']
+    const lsRes = IS_WIN
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', ...lsArgs], { encoding: 'utf-8', stdio: 'pipe', shell: false })
+      : spawnSync('npm', lsArgs, { encoding: 'utf-8', stdio: 'pipe', shell: false })
+    const lsOutput = (lsRes.stdout || '') + (lsRes.stderr || '')
+    const wasInstalled = /autocorrect-node@\d/.test(lsOutput)
+
+    if (wasInstalled) {
+      info('卸 autocorrect-node 全局 npm 包...')
+      const npmRes = IS_WIN
+        ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', 'uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
+        : spawnSync('npm', ['uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
+      if (npmRes.status === 0) {
+        removed.push('autocorrect-node(npm 全局包)')
+      } else {
+        warn(`autocorrect-node 卸载失败:${npmRes.status}`)
+      }
     } else {
-      warn(`autocorrect-node 卸载失败(也许本来就没装),跳过`)
+      info('autocorrect-node 本来就没装(跳过)')
     }
     // log
     if (existsSync(LOG_PATH)) {
@@ -389,40 +427,41 @@ function cmdUninstall(args) {
 // ============================================================================
 // zhfix restore <file>
 // 还原指定文件到最近的备份(由 /zhfix skill 在改之前自动生成)
-// 备份命名:~/.zhfix/backups/<encoded_abs_path>.<timestamp>.bak
-// 路径编码:绝对路径里的 / \ : 都替换成 _
+// 备份命名:~/.zhfix/backups/<hash>.<basename>.<timestamp>.bak
+// pre-restore 备份命名:同名 + ".pre-restore.bak" 后缀,排序时被过滤
 // ============================================================================
-function encodePathForBackup(absPath) {
-  return absPath.replace(/[\/\\:]/g, '_')
-}
-
 function cmdRestore(args) {
   const fileArg = args[0]
   if (!fileArg) fail(`用法:zhfix restore <文件路径>`)
+  // F3 防御:用户误把 .bak 文件本身当参数
+  if (fileArg.endsWith('.bak')) {
+    fail(`restore 接的是原文件路径,不是备份文件本身。例:zhfix restore D:/docs/prd.md`)
+  }
 
   const fileAbs = resolvePath(fileArg)
   if (!existsSync(BACKUPS_DIR)) fail(`没找到备份目录 ${BACKUPS_DIR}`)
 
   const encoded = encodePathForBackup(fileAbs)
-  // glob 等价:列 backups 里以 <encoded>. 开头、.bak 结尾的
   let entries
   try { entries = readdirSync(BACKUPS_DIR) } catch { fail(`读不到备份目录`) }
-  const matches = entries.filter(n => n.startsWith(encoded + '.') && n.endsWith('.bak'))
+
+  // F2 修:只找"普通备份",排除 .pre-restore.bak(避免它被当成"最新"还原回去)
+  const matches = entries.filter(n =>
+    n.startsWith(encoded + '.') &&
+    n.endsWith('.bak') &&
+    !n.endsWith('.pre-restore.bak'),
+  )
   if (matches.length === 0) {
-    fail(`没找到 ${fileAbs} 的备份(查 ${BACKUPS_DIR} 看看,或者没改过这个文件)`)
+    fail(`没找到 ${fileAbs} 的备份。(如要查看所有备份:ls ${BACKUPS_DIR})`)
   }
 
-  // 按时间戳排序(文件名格式:<encoded>.<YYYYMMDD-HHMMSS>.bak)
-  matches.sort((a, b) => {
-    const ta = a.slice(encoded.length + 1, -4)
-    const tb = b.slice(encoded.length + 1, -4)
-    return tb.localeCompare(ta)
-  })
+  // 按文件名(含时间戳)字典序排序,降序取最新
+  matches.sort((a, b) => b.localeCompare(a))
   const latest = join(BACKUPS_DIR, matches[0])
 
   // 还原前再备份当前状态(以防误用 restore)
-  const ts = new Date().toISOString().replace(/[:.T-]/g, '').slice(0, 14)
-  const preRestoreName = `${encoded}.${ts.slice(0,8)}-${ts.slice(8,14)}.pre-restore.bak`
+  const ts = makeTimestamp()
+  const preRestoreName = `${encoded}.${ts}.pre-restore.bak`
   try {
     if (existsSync(fileAbs)) {
       copyFileSync(fileAbs, join(BACKUPS_DIR, preRestoreName))
@@ -436,7 +475,12 @@ function cmdRestore(args) {
     copyFileSync(latest, fileAbs)
     ok(`已还原:${fileAbs}`)
     info(`  来源备份:${latest}`)
-    info(`  本次操作前已存:${preRestoreName}(再次 restore 可回到这一刻)`)
+    info(`  本次操作前已存:${preRestoreName}(再次 restore 仍走"普通备份",这份 pre-restore 保留)`)
+    // F16 修:写一行 log,便于事后追溯
+    try {
+      const stamp = new Date().toISOString()
+      appendFileSync(LOG_PATH, `${stamp}  RESTORE ${fileAbs}: from=${matches[0]}\n`, 'utf-8')
+    } catch {}
   } catch (e) {
     fail(`还原失败:${e.message}`)
   }
@@ -449,6 +493,8 @@ function cmdRestore(args) {
 // ============================================================================
 function cmdClearBackups(args) {
   const yes = args.includes('--yes') || args.includes('-y')
+  // F3 修:默认不动 pre-restore(那是给"撤销 restore"留的退路);--include-pre-restore 才一并清
+  const includePreRestore = args.includes('--include-pre-restore')
 
   if (!existsSync(BACKUPS_DIR)) {
     info(`备份目录不存在:${BACKUPS_DIR}`)
@@ -456,33 +502,61 @@ function cmdClearBackups(args) {
     return
   }
 
-  const files = readdirSync(BACKUPS_DIR).filter(n => n.endsWith('.bak'))
-  if (files.length === 0) {
+  const allBak = readdirSync(BACKUPS_DIR).filter(n => n.endsWith('.bak'))
+  if (allBak.length === 0) {
     info(`${BACKUPS_DIR} 里没有备份文件`)
     return
   }
 
-  let totalSize = 0
-  for (const f of files) {
-    try { totalSize += statSync(join(BACKUPS_DIR, f)).size } catch {}
+  const preRestores = allBak.filter(n => n.endsWith('.pre-restore.bak'))
+  const regular = allBak.filter(n => !n.endsWith('.pre-restore.bak'))
+  const toDelete = includePreRestore ? allBak : regular
+
+  // 列出概览;按 basename(去掉 hash 前缀)分组方便用户认出
+  function sizeOf(f) {
+    try { return statSync(join(BACKUPS_DIR, f)).size } catch { return 0 }
   }
-  const sizeMb = (totalSize / 1024 / 1024).toFixed(2)
+  function totalSize(files) {
+    return files.reduce((s, f) => s + sizeOf(f), 0)
+  }
+  function fmtMb(n) { return (n / 1024 / 1024).toFixed(2) + ' MB' }
 
   info(`备份目录:${BACKUPS_DIR}`)
-  info(`共 ${files.length} 个备份,${sizeMb} MB`)
+  info(`普通备份:${regular.length} 个 (${fmtMb(totalSize(regular))})`)
+  info(`pre-restore 快照:${preRestores.length} 个 (${fmtMb(totalSize(preRestores))})`)
+
+  // F15 改进:按 basename 分组列前几条
+  if (regular.length > 0) {
+    const byName = {}
+    regular.forEach(f => {
+      // 文件名格式:<hash>.<basename>.<timestamp>.bak — 去掉前后取中间
+      const m = f.match(/^[a-f0-9]+\.(.+?)\.\d{8}-\d{6}(-\d{3})?\.bak$/)
+      const orig = m ? m[1] : f
+      ;(byName[orig] ||= []).push(f)
+    })
+    info('')
+    info('按文件分组(取最多 8 个):')
+    Object.entries(byName).slice(0, 8).forEach(([k, v]) => info(`  ${k}  × ${v.length}`))
+  }
 
   if (!yes) {
     info('')
-    info('要清掉它们,加 --yes:')
+    info(`要删 ${toDelete.length} 个文件,加 --yes:`)
     info('  zhfix clear-backups --yes')
+    if (preRestores.length > 0 && !includePreRestore) {
+      info(`  (pre-restore 快照默认保留,加 --include-pre-restore 才一并清)`)
+    }
     return
   }
 
   let deleted = 0, failed = 0
-  for (const f of files) {
+  for (const f of toDelete) {
     try { unlinkSync(join(BACKUPS_DIR, f)); deleted++ } catch { failed++ }
   }
   ok(`已删 ${deleted} 个备份(${failed > 0 ? failed + ' 个失败' : '全部成功'})`)
+  if (preRestores.length > 0 && !includePreRestore) {
+    info(`保留了 ${preRestores.length} 个 pre-restore 快照(用 --include-pre-restore 可一并清)`)
+  }
 }
 
 // ============================================================================
