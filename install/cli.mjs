@@ -7,7 +7,7 @@
 process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.code !== 'DEP0190') console.warn(w) })
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync, appendFileSync, renameSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
