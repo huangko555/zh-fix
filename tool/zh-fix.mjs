@@ -26,6 +26,7 @@ import { computeMaskedText } from './mask.mjs'
 import { applySemicolonRule } from './rules/semicolon.mjs'
 import { applyBoundaryRule } from './rules/boundary.mjs'
 import { applyCjkSurroundRule } from './rules/cjk-surround.mjs'
+import { applyAttrTextRule } from './rules/attr-text.mjs'
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024
 const TIMEOUT_MS = 8000
@@ -132,12 +133,30 @@ function hasOptOut(text) {
   return /<!--\s*zh-fix:\s*off\s*-->/.test(head) || /^\s*<!--\s*zh-fix\s+disabled\s*-->/m.test(head)
 }
 
+// autocorrect 会越界改 fenced code / <script> / <style> / <pre> / <code> 里的中文标点。
+// 利用"autocorrect 不改块边界标记"——块的数量/顺序在原文和 autocorrect 后一致,逐块用原文回填。
+// 数量对不上(理论上不该发生)就保守跳过,退化为现状并记日志。
+const BLOCK_RE = /```[\s\S]*?```|~~~[\s\S]*?~~~|<(script|style|pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi
+
+function restoreCodeBlocks(original, afterAc) {
+  const orig = original.match(BLOCK_RE)
+  if (!orig) return afterAc
+  const ac = afterAc.match(BLOCK_RE)
+  if (!ac || ac.length !== orig.length) {
+    logLine(`BLOCK_MISMATCH orig=${orig.length} ac=${ac ? ac.length : 0}: 跳过代码块回填`)
+    return afterAc
+  }
+  let i = 0
+  return afterAc.replace(BLOCK_RE, () => orig[i++])
+}
+
 function applyPatches(text) {
   const masked = computeMaskedText(text)
   let t = text
   t = applySemicolonRule(t, masked)
   t = applyBoundaryRule(t, masked)
   t = applyCjkSurroundRule(t, masked)
+  t = applyAttrTextRule(t, masked)
   return t
 }
 
@@ -207,7 +226,8 @@ async function main() {
     logLine(`AC_FAIL ${filePath}: ${acRes.reason}`)
     process.exit(0)
   }
-  const afterAc = acRes.text
+  // 把 autocorrect 越界改的代码块/script/style 回填回原文
+  const afterAc = restoreCodeBlocks(text, acRes.text)
 
   // 我们的补丁
   const patched = applyPatches(afterAc)
