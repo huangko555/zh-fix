@@ -80,11 +80,11 @@ TS=$(date +%Y%m%d-%H%M%S-%3N 2>/dev/null || date +%Y%m%d-%H%M%S-000)
 HASH=$(printf %s "$FILE_ABS" | sha1sum | head -c 8)
 BNAME=$(basename "$FILE_ABS")
 BACKUP_PATH="$HOME/.zhfix/backups/${HASH}.${BNAME}.${TS}.bak"
-cp -- "$FILE_ABS" "$BACKUP_PATH"
-echo "backup_ok: $BACKUP_PATH"
+# 用 && 短路 + test -s 校验备份文件存在且非空,任何一步失败立即 exit 1
+cp -- "$FILE_ABS" "$BACKUP_PATH" && test -s "$BACKUP_PATH" && echo "backup_ok: $BACKUP_PATH" || { echo "backup_fail"; exit 1; }
 ```
 
-确认 `backup_ok` 那行回显且文件存在,**否则停下报错**,不要进下一步。
+**关键**:看到 `backup_fail` 或 Bash exit code 非 0 → 停下,告诉用户备份失败、原文件未动。**绝不能进下一步改原文件**。
 
 ### 5. 处理
 

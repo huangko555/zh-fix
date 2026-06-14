@@ -32,8 +32,9 @@ const TIMEOUT_MS = 8000
 const ALLOWED_EXTS = new Set(['.md', '.markdown', '.html', '.htm'])
 const LOG_PATH = join(homedir(), '.claude', 'zh-fix.log')
 
-// 全局兜底超时
-if (!process.argv[2]) {
+// A4 修:全局兜底超时**永远挂上**(原代码只在 CLI 模式无参数时挂,逻辑反了
+// —— hook 模式现在通过 CLI 调用,带参数,反而拿不到兜底)
+{
   const t = setTimeout(() => {
     logLine('TIMEOUT (8s exceeded)')
     process.exit(0)
@@ -100,16 +101,27 @@ function checkFile(filePath) {
 }
 
 // in-process autocorrect:接 string,返回 string
+// A1+A2 修:autocorrect-node 在某些 edge 输入下可能返回 "" 或大幅缩短的内容
+// 拒绝这两种情况,防止把用户原文件清空 / 截断
 function runAutocorrect(filePath, text) {
   try {
     const result = formatFor(text, filePath)
-    if (typeof result === 'string') return { ok: true, text: result }
-    // formatFor 返回 { out, error } 形态时
-    if (result && typeof result.out === 'string') {
-      if (result.error) return { ok: false, reason: `ac-error: ${result.error}` }
-      return { ok: true, text: result.out }
+    const out = typeof result === 'string'
+      ? result
+      : (result && typeof result.out === 'string' ? result.out : null)
+    if (out === null) {
+      if (result?.error) return { ok: false, reason: `ac-error: ${result.error}` }
+      return { ok: false, reason: 'ac-unknown-result' }
     }
-    return { ok: false, reason: 'ac-unknown-result' }
+    // A1:非空输入不该返回空串
+    if (out === '' && text !== '') {
+      return { ok: false, reason: 'ac-returned-empty-on-nonempty-input' }
+    }
+    // A2:正文超过 100 字时,处理后长度不该跌到 50% 以下
+    if (text.length > 100 && out.length < text.length * 0.5) {
+      return { ok: false, reason: `ac-shrunk-suspicious(${text.length}→${out.length})` }
+    }
+    return { ok: true, text: out }
   } catch (e) {
     return { ok: false, reason: `ac-throw: ${e.message}` }
   }
@@ -135,6 +147,11 @@ function tmpName(filePath) {
 }
 
 function atomicWrite(filePath, content) {
+  // A1+A5 修:任何情况下都拒绝写空串(防止把用户原文件清空)
+  if (content == null || content === '') {
+    logLine(`WRITE_REFUSED ${filePath}: empty-content`)
+    return false
+  }
   const tmpPath = tmpName(filePath)
   try {
     writeFileSync(tmpPath, content, 'utf-8')
@@ -200,6 +217,12 @@ async function main() {
 
   if (finalText === original) {
     // 完全没改 → 不写,不记
+    process.exit(0)
+  }
+
+  // A2 修:最终长度大幅缩短 → 拒绝写,记日志让用户能发现
+  if (original.length > 100 && finalText.length < original.length * 0.5) {
+    logLine(`WRITE_REFUSED ${filePath}: final-shrunk-suspicious(${original.length}→${finalText.length})`)
     process.exit(0)
   }
 
