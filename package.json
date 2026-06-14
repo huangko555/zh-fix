@@ -1,5 +1,5 @@
 {
-  "name": "zh-fix",
+  "name": "zhfix",
   "version": "0.1.0",
   "description": "Auto-fix Chinese (CJK) punctuation in Markdown / HTML files written by Claude Code or any AI agent — a thin wrapper on top of AutoCorrect.",
   "keywords": [
@@ -26,6 +26,14 @@
     "url": "https://github.com/huangko555/zh-fix/issues"
   },
   "type": "module",
+  "bin": {
+    "zhfix": "install/cli.mjs"
+  },
+  "files": [
+    "tool/",
+    "install/",
+    "skills/"
+  ],
   "engines": {
     "node": ">=18"
   },
@@ -33,7 +41,6 @@
     "autocorrect-node": "2.14.0"
   },
   "scripts": {
-    "install-zhfix": "node install/install.mjs",
-    "uninstall-zhfix": "node ~/.zhfix/cli.mjs uninstall"
+    "install-zhfix": "node install/install.mjs"
   }
 }

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// installer/install.mjs
-// 一条命令搞定全套:本地装 autocorrect-node + ~/.zhfix/ 基础设施 + Claude Code hook + zhfix PATH 命令
-// 用法:在 repo 根目录 `node install/install.mjs`
+// installer/install.mjs —— 开发模式入口(从 repo 本地装)
+// 普通用户用 `npm i -g zhfix && zhfix install`,不走这里。
+// 本脚本:preflight + 在 repo 内本地装 autocorrect-node + 调 cli.mjs install 接入 Claude Code。
+// 用法:在 repo 根目录 `node install/install.mjs`(如需全局 zhfix 命令,再 `npm link`)
 
 // Node 24+ 对 cmd.exe→.cmd 子链有误报的 DEP0190 警告,压制
 process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.code !== 'DEP0190') console.warn(w) })
 
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -21,7 +22,6 @@ const INSTALL_DIR = __dirname
 
 const IS_WIN = process.platform === 'win32'
 const HOME = homedir()
-const ZHFIX_DIR = join(HOME, '.zhfix')
 
 function info(m) { process.stdout.write(m + '\n') }
 function ok(m)   { process.stdout.write('✅ ' + m + '\n') }
@@ -97,47 +97,19 @@ if (existsSync(acLocal)) {
   ok(`依赖装好`)
 }
 
-// 3. ~/.zhfix/ 基础设施
-if (!existsSync(ZHFIX_DIR)) mkdirSync(ZHFIX_DIR, { recursive: true })
-copyFileSync(join(INSTALL_DIR, 'cli.mjs'), join(ZHFIX_DIR, 'cli.mjs'))
-copyFileSync(join(INSTALL_DIR, 'hook.mjs'), join(ZHFIX_DIR, 'hook.mjs'))
-ok(`基础设施装到 ${ZHFIX_DIR}`)
-
-// 4. 调 cli.mjs init
+// 3. 接入 Claude Code:调 cli.mjs 的 install 流程
+//    cli.mjs 自己会写 config、把 hook.mjs 复制进 ~/.zhfix、配 settings hook、装 skill,
+//    并定位到 repo 自身的 tool/(传 TOOL_ROOT)。命令本体由 npm / npm link 提供,这里不再手动复制 cli.mjs。
 info('')
-const initRes = spawnSync('node', [join(ZHFIX_DIR, 'cli.mjs'), 'init', TOOL_ROOT], {
+const initRes = spawnSync('node', [join(INSTALL_DIR, 'cli.mjs'), 'install', TOOL_ROOT], {
   stdio: 'inherit', shell: false,
 })
-if (initRes.status !== 0) fail(`zhfix init 失败`)
+if (initRes.status !== 0) fail(`接入失败`)
 
 info('')
 info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-ok(`🎉 安装完成!下面是你需要知道的:`)
-info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-info('')
-info('【接下来怎么用】')
-info('')
-info('  你什么都不用做。 重启 Claude Code 后,继续正常用 ——')
-info('  Claude 每次写完 .md / .html 文件时,工具会在后台自动')
-info('  把中文段落里的半角标点(, . ? ! 等)改成全角。')
-info('')
-info('【会改成什么样】')
-info('')
-info('  写入:  你好,世界.这是一个测试,带边界(英文),还有.')
-info('  落盘:  你好，世界。这是一个测试，带边界 (英文)，还有。')
-info('')
-info('【常用命令】')
-info('')
-info('  zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动')
-info('  zhfix pause      当前目录不想被处理(英文文档 / 代码示例等)')
-info('  zhfix resume     恢复处理')
-info('  zhfix uninstall  卸载')
-info('')
-info('【出问题】')
-info('')
-info('  - 想看 trace:日志在 ~/.claude/zh-fix.log')
-info('  - 紧急关闭:看 tool/EMERGENCY-OFF.md')
-info('')
-info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-info('重启 Claude Code,完事了。')
+info('repo 本地装完成(开发模式)。使用说明由上面的 zhfix install 打印。')
+info('如果想在任意目录直接敲 zhfix 命令,在本 repo 根目录再跑一次:')
+info('  npm link')
+info('(普通用户不用——他们 npm i -g zhfix 就自带命令了)')
 info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')

@@ -15,9 +15,16 @@ before: 你好,世界.这是一个测试,带边界(英文),还有.
 after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 ```
 
-**怎么安装**：把下面这句话发给你的 AI agent:
+**怎么安装**(两条命令)：
 
-> 帮我装一下 https://github.com/huangko555/zh-fix,按 AGENTS.md 来，装好告诉我怎么用
+```powershell
+npm i -g zhfix     # 装命令本体 + 依赖，源码进全局 node_modules，工作区零残留
+zhfix install      # 接入 Claude Code
+```
+
+不想敲命令，把这句发给你的 AI agent：
+
+> 帮我装一下 zhfix(npm i -g zhfix 再 zhfix install)，装好告诉我怎么用
 
 **如何使用**：装完重启 Claude Code, **正常情况下完全不用管** ——每次写完 `.md` / `.html`,hook 在后台自动跑完。
 
@@ -31,7 +38,7 @@ after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 zhfix status            看 hook 是否启用 + 当前目录是否暂停 + 今日活动
 zhfix pause             当前目录暂停(写英文文档或代码示例时)
 zhfix resume            恢复当前目录(撤销 pause)
-zhfix uninstall         卸载(加 --all 还会卸 autocorrect 和清日志)
+zhfix uninstall         卸载接入(再跑 npm uninstall -g zhfix 删本体)
 ```
 
 完整命令清单 `zhfix help`(还有 `restore` `clear-backups` 等不常用的)。
@@ -58,54 +65,63 @@ zhfix uninstall         卸载(加 --all 还会卸 autocorrect 和清日志)
 
 实测命中率：同一份 PRD 跑一次，**autocorrect 单跑残留 32 处 → autocorrect + zh-fix 残留 5 处**(修正率 84%)，后续真实场景接近 0 残留。
 
-## 怎么装 (让你的 AI agent 干)
+## 怎么装
 
-让你的 Claude / 其他 agent 读 [`AGENTS.md`](./AGENTS.md)，它知道一条命令搞定：
-
-```bash
-node install/install.mjs
+```powershell
+npm i -g zhfix     # ① 装命令本体，autocorrect 依赖随包自动装，源码进全局 node_modules，工作区零残留
+zhfix install      # ② 接入 Claude Code
 ```
 
-这条命令：
-1. 检查 Node ≥ 18
-2. **本地** `npm install`(在 repo 内，把 `autocorrect-node@2.14.0` 装到 `node_modules/`，**不污染全局**)
-3. 把 `install/cli.mjs`、`install/hook.mjs` 放进 `~/.zhfix/`
-4. 写 `~/.zhfix/config.json`，指向本仓库的 `tool/`
-5. 配 Claude Code 的 PostToolUse hook
-6. 装 `zhfix` 命令到 npm 全局 bin(PATH 已有)
+`zhfix install` 干的事：
+1. 定位包自身的 `tool/`(全局 node_modules 内)，写进 `~/.zhfix/config.json`
+2. 把 hook 路由 `hook.mjs` 放进 `~/.zhfix/`
+3. 配 Claude Code 的 PostToolUse hook(`~/.claude/settings.json`)
+4. 装 `/zhfix` skill 到 `~/.claude/skills/`
 
 装完重启 Claude Code，试着写一份中文 `.md`，半角标点会自动变全角。
 
-> `tool/zh-fix.mjs` 用 `import { formatFor } from 'autocorrect-node'` **in-process** 调用，无子进程开销、无 PATH 劫持风险。autocorrect-node 是声明式 npm 依赖，用户从 npm 官方仓库下载，不打包源码。
+> `zhfix` 命令由 npm 在 `npm i -g` 时自动挂到全局 bin(PATH 已有)。`tool/zh-fix.mjs` 用 `import { formatFor } from 'autocorrect-node'` **in-process** 调用，无子进程开销、无 PATH 劫持风险。autocorrect-node 是声明式 npm 依赖，随 zhfix 包从 npm 官方仓库下载，不打包源码。
+>
+> 开发者想从 repo 本地装 (改代码时)：repo 根目录 `node install/install.mjs`，再 `npm link` 拿全局命令。
 
 ## zhfix 命令
 
 ```
-zhfix init [tool 路径]           重新绑定 tool 路径(搬目录 / 修配置时用)
+zhfix install                    首次接入 Claude Code(npm i -g zhfix 之后跑这个)
+zhfix init [tool 路径]           重新绑定 / 修复配置(默认指向包自身 tool)
 zhfix pause                      暂停当前目录(及子目录)
 zhfix resume                     恢复当前目录的自动处理(撤销 pause)
 zhfix status                     看配置 / 暂停列表 / 今日活动
 zhfix restore <文件>             还原指定文件到上次 /zhfix 改之前的备份
 zhfix clear-backups [--yes]      清掉所有"普通备份"(pre-restore 默认保留)
-zhfix uninstall [--all]          卸载;--all 还会卸 autocorrect + 清日志和备份配置
+zhfix uninstall [--all]          卸载接入;--all 清日志和备份配置(删本体另跑 npm uninstall -g zhfix)
 zhfix help                       帮助
 ```
 
 > **`zhfix uninstall` 默认会删 `~/.zhfix/`，里面的备份会一起没**。如果想保留某些备份做长期归档，提前 `cp` 出来。
 
+### 卸载是两步
+
+```powershell
+zhfix uninstall            # ① 清接入:settings hook、bash 包装、~/.zhfix/、/zhfix skill
+npm uninstall -g zhfix     # ② 删本体:zhfix 命令 + tool 源 + autocorrect 依赖
+```
+
+先 ① 再 ②——因为卸了本体 `zhfix` 命令就没了。
+
 ### `zhfix init` 是干啥的
 
-首次安装由 `install/install.mjs` 完成 (装 autocorrect、复制基础设施、再调 `zhfix init` 写配置)。
+首次接入由 `zhfix install` 完成 (定位包内 tool、写配置、配 hook、装 skill)。
 **之后你日常用不到 init**。会用到 `zhfix init` 的几种场景：
 
 | 场景 | 操作 |
 |---|---|
-| 搬目录 (把 tool 移到别处) | `zhfix init <新路径>` 改 config 指向新位置 |
-| 换电脑 (clone repo 到新路径) | `cd <repo>` → `zhfix init`(默认拿当前目录) |
+| 把 tool 指到别处 (开发时指向 repo) | `zhfix init <新路径>` 改 config 指向新位置 |
+| 换电脑 | 直接重装：`npm i -g zhfix && zhfix install` |
 | `settings.json` 被手改坏了 | `zhfix init` 重新写一遍 hook 段 |
-| `~/.zhfix/config.json` 被误删 | `zhfix init <tool 路径>` 重建 |
+| `~/.zhfix/config.json` 被误删 | `zhfix init` 重建 (默认指向包自身 tool) |
 
-它只重写"指针"层 (config + hook 包装 + settings.json + PATH 命令)，**不动 autocorrect、不动 tool 源、不动暂停列表**。可以安心反复跑。
+它只重写"指针"层 (config + hook 包装 + settings.json + hook.mjs)，**不动 autocorrect、不动 tool 源、不动暂停列表**。可以安心反复跑。
 
 ## 仓库结构
 
@@ -114,17 +130,17 @@ zhfix help                       帮助
 ├── README.md           (你正在读)
 ├── AGENTS.md           AI agent 安装指南
 ├── LICENSE             MIT
-├── package.json        元数据(无运行时 deps)
-├── tool/               核心处理代码
+├── package.json        元数据 + bin(zhfix 命令) + autocorrect 依赖声明
+├── tool/               核心处理代码(随 npm 包发布)
 │   ├── zh-fix.mjs      主程序
 │   ├── mask.mjs        跳过区域引擎
 │   ├── rules/          补丁规则(semicolon, boundary, cjk-surround, cjk)
 │   └── EMERGENCY-OFF.md 紧急关闭指南
-├── install/            安装层(都是源,会被复制到 ~/.zhfix/)
-│   ├── install.mjs     安装器入口
-│   ├── cli.mjs         zhfix 命令实现
-│   └── hook.mjs        hook 路由(读 config 找 tool + 检查 pause)
-└── docs/assets/        头图等静态资源
+├── install/            安装/命令层(随 npm 包发布)
+│   ├── install.mjs     开发模式入口(从 repo 本地装)
+│   ├── cli.mjs         zhfix 命令实现(npm bin 入口)
+│   └── hook.mjs        hook 路由(装时复制到 ~/.zhfix/，读 config 找 tool + 检查 pause)
+└── docs/assets/        头图等静态资源(不随 npm 包发布)
 ```
 
 ## 架构
@@ -147,7 +163,7 @@ PostToolUse hook (matcher: Write|Edit|MultiEdit)
          └─ 6. 原子改名写回
 ```
 
-搬目录？重跑 `zhfix init <新路径>`。其他都不用动。
+搬 tool 路径？重跑 `zhfix init <新路径>`。其他都不用动。
 
 ## 日志 + 调试
 

@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process'
 import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
 // ============================================================================
 // 公共工具(给备份命名/时间戳用)
@@ -48,6 +49,14 @@ const SETTINGS_JSON = join(HOME, '.claude', 'settings.json')
 const LOG_PATH = join(HOME, '.claude', 'zh-fix.log')
 const SKILL_DIR = join(HOME, '.claude', 'skills', 'zhfix')
 
+// 包自身位置:cli.mjs 在 <pkg>/install/cli.mjs,上级目录即包根。
+// npm 全局装后包根 = <npm-global>/node_modules/zhfix/,tool / hook / skill 都从这里取,
+// 不写死任何机器路径,靠 import.meta.url 让包自己定位自己。
+const PKG_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
+const PKG_TOOL = join(PKG_ROOT, 'tool')
+const PKG_HOOK_SRC = join(PKG_ROOT, 'install', 'hook.mjs')
+const PKG_SKILL_SRC = join(PKG_ROOT, 'skills', 'zhfix', 'SKILL.md')
+
 // PATH 安装位置:用 npm 全局 bin(已经在 PATH 里)
 function getNpmBin() {
   const r = IS_WIN
@@ -59,7 +68,6 @@ function getNpmBin() {
 }
 
 function getZhfixCmdPath()  { const b = getNpmBin(); return b ? join(b, IS_WIN ? 'zhfix.cmd' : 'zhfix') : null }
-function getZhfixShPath()   { const b = getNpmBin(); return b ? join(b, 'zhfix') : null }
 
 function readConfig() {
   try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) } catch { return null }
@@ -90,7 +98,8 @@ function ok(msg)   { process.stdout.write('✅ ' + msg + '\n') }
 // ============================================================================
 function cmdInit(args) {
   const arg = args[0]
-  const toolRoot = arg ? resolvePath(arg) : resolvePath(process.cwd())
+  // 默认指向包自身的 tool/(npm 全局包内);传参时用参数(开发者从 repo 指过去)
+  const toolRoot = arg ? resolvePath(arg) : PKG_TOOL
 
   if (!existsSync(join(toolRoot, 'zh-fix.mjs'))) {
     fail(`找不到 zh-fix.mjs 在: ${toolRoot}\n用法: zhfix init [tool 目录]`)
@@ -121,6 +130,13 @@ function cmdInit(args) {
   ok(`config 已写: ${CONFIG_PATH}`)
   ok(`  tool_root = ${cfg.tool_root}`)
 
+  // hook 路由层放进 ~/.zhfix/(bash hook 会调它);从包内复制一份过去
+  if (existsSync(PKG_HOOK_SRC)) {
+    if (!existsSync(ZHFIX_DIR)) mkdirSync(ZHFIX_DIR, { recursive: true })
+    copyFileSync(PKG_HOOK_SRC, join(ZHFIX_DIR, 'hook.mjs'))
+    ok(`hook 路由: ${join(ZHFIX_DIR, 'hook.mjs')}`)
+  }
+
   const hookDir = dirname(HOOK_BASH)
   if (!existsSync(hookDir)) mkdirSync(hookDir, { recursive: true })
   const bashContent = `#!/usr/bin/env bash
@@ -138,17 +154,10 @@ exit 0
   installPostToolUseHook()
   ok(`settings.json PostToolUse 已配`)
 
-  const shimResult = installPathShim()
-  if (shimResult.ok) {
-    ok(`zhfix 命令已装到 PATH:`)
-    shimResult.paths.forEach(p => info(`    ${p}`))
-  } else {
-    warn(`PATH shim 装失败:${shimResult.reason}`)
-    info(`  替代:用 node ${join(ZHFIX_DIR, 'cli.mjs')} <command>`)
-  }
+  // zhfix 命令由 npm bin 提供(npm i -g zhfix 时自动挂到 PATH),这里不再手写 shim
 
-  // 装 /zhfix skill 到 ~/.claude/skills/zhfix/
-  const skillSrc = join(toolRoot, '..', 'skills', 'zhfix', 'SKILL.md')
+  // 装 /zhfix skill 到 ~/.claude/skills/zhfix/(从包内取)
+  const skillSrc = PKG_SKILL_SRC
   if (existsSync(skillSrc)) {
     if (!existsSync(SKILL_DIR)) mkdirSync(SKILL_DIR, { recursive: true })
     copyFileSync(skillSrc, join(SKILL_DIR, 'SKILL.md'))
@@ -160,6 +169,47 @@ exit 0
   info('')
   info('🎉 安装完成。重启 Claude Code 让 hook 和 /zhfix 命令都生效。')
   info('   测试:zhfix status')
+}
+
+// ============================================================================
+// zhfix install — 首次接入 Claude Code(npm i -g zhfix 之后跑这个)
+// = preflight + init(自动用包内 tool) + 一段使用说明
+// ============================================================================
+function cmdInstall(args) {
+  // Windows 上 bash hook 强依赖 Git Bash,先探测
+  if (IS_WIN) {
+    const bashCheck = spawnSync('cmd.exe', ['/d', '/s', '/c', 'where', 'bash'], { encoding: 'utf-8', shell: false })
+    if (bashCheck.status !== 0 || !bashCheck.stdout) {
+      fail(`Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
+请先装 Git for Windows:https://git-scm.com/download/win
+装完重开终端再跑 zhfix install。`)
+    }
+  }
+  // Claude Code 装没装(看 ~/.claude/ 在不在)
+  if (!existsSync(join(HOME, '.claude'))) {
+    warn(`没检测到 Claude Code(${join(HOME, '.claude')} 不存在)。`)
+    warn(`zhfix 是给 Claude Code 用的 hook,没装 Claude Code 这工具不会自动触发——`)
+    warn(`仍会继续配置,hook 只在 Claude Code 装好并重启后才生效。`)
+  }
+
+  cmdInit(args)
+
+  info('')
+  info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  info('【接下来怎么用】')
+  info('  你什么都不用做。重启 Claude Code 后正常用 ——')
+  info('  Claude 每次写完 .md / .html,工具会在后台把中文段落里的')
+  info('  半角标点改成全角。')
+  info('')
+  info('  写入:  你好,世界.带边界(英文).')
+  info('  落盘:  你好，世界。带边界 (英文)。')
+  info('')
+  info('【常用命令】')
+  info('  zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动')
+  info('  zhfix pause      当前目录不想被处理(英文文档 / 代码示例)')
+  info('  zhfix resume     恢复处理')
+  info('  zhfix uninstall  卸载接入(之后再 npm uninstall -g zhfix 删本体)')
+  info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 }
 
 function installPostToolUseHook() {
@@ -202,27 +252,6 @@ function installPostToolUseHook() {
     })
   }
   writeFileSync(SETTINGS_JSON, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
-}
-
-function installPathShim() {
-  const bin = getNpmBin()
-  if (!bin) return { ok: false, reason: '找不到 npm 全局 bin 目录' }
-  if (!existsSync(bin)) mkdirSync(bin, { recursive: true })
-  const paths = []
-  if (IS_WIN) {
-    const cmdPath = join(bin, 'zhfix.cmd')
-    writeFileSync(cmdPath, `@echo off\r\nnode "%USERPROFILE%\\.zhfix\\cli.mjs" %*\r\n`, 'utf-8')
-    paths.push(cmdPath)
-    const shPath = join(bin, 'zhfix')
-    writeFileSync(shPath, `#!/bin/sh\nnode "$HOME/.zhfix/cli.mjs" "$@"\n`, 'utf-8')
-    paths.push(shPath)
-  } else {
-    const shPath = join(bin, 'zhfix')
-    writeFileSync(shPath, `#!/bin/sh\nnode "$HOME/.zhfix/cli.mjs" "$@"\n`, 'utf-8')
-    try { chmodSync(shPath, 0o755) } catch {}
-    paths.push(shPath)
-  }
-  return { ok: true, paths }
 }
 
 // ============================================================================
@@ -383,10 +412,7 @@ function cmdUninstall(args) {
 
   if (existsSync(HOOK_BASH)) tryUnlink(HOOK_BASH)
 
-  const cmdPath = getZhfixCmdPath()
-  if (cmdPath && existsSync(cmdPath)) tryUnlink(cmdPath)
-  const shPath = getZhfixShPath()
-  if (shPath && existsSync(shPath) && shPath !== cmdPath) tryUnlink(shPath)
+  // 注意:zhfix 命令本身由 npm bin 提供,不在这里删 —— 交给 `npm uninstall -g zhfix`
 
   // B8 修:卸 ~/.zhfix/ 之前,如果 backups/ 非空,默认搬到外面保留
   // 用户加 --purge-backups 才一并删
@@ -413,30 +439,9 @@ function cmdUninstall(args) {
   // 删 /zhfix skill
   if (existsSync(SKILL_DIR)) tryRmDir(SKILL_DIR)
 
-  // --all:一并卸独立组件
+  // --all:一并清掉日志和 settings 备份
+  // (autocorrect-node 是 zhfix 包的依赖,随 `npm uninstall -g zhfix` 一起删,这里不单独卸)
   if (all) {
-    // F4 修:先用 npm ls 探测是否真装了,避免"本来没装"的情况误报"已卸"
-    info('探测 autocorrect-node 是否已装...')
-    const lsArgs = ['ls', '-g', '--depth=0', 'autocorrect-node']
-    const lsRes = IS_WIN
-      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', ...lsArgs], { encoding: 'utf-8', stdio: 'pipe', shell: false })
-      : spawnSync('npm', lsArgs, { encoding: 'utf-8', stdio: 'pipe', shell: false })
-    const lsOutput = (lsRes.stdout || '') + (lsRes.stderr || '')
-    const wasInstalled = /autocorrect-node@\d/.test(lsOutput)
-
-    if (wasInstalled) {
-      info('卸 autocorrect-node 全局 npm 包...')
-      const npmRes = IS_WIN
-        ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', 'uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
-        : spawnSync('npm', ['uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
-      if (npmRes.status === 0) {
-        removed.push('autocorrect-node(npm 全局包)')
-      } else {
-        warn(`autocorrect-node 卸载失败:${npmRes.status}`)
-      }
-    } else {
-      info('autocorrect-node 本来就没装(跳过)')
-    }
     // log
     if (existsSync(LOG_PATH)) tryUnlink(LOG_PATH)
     // settings.json 时间戳备份(C5 修:只删严格匹配我们时间戳格式的,不动用户手动备份)
@@ -474,20 +479,21 @@ function cmdUninstall(args) {
 
   if (!all) {
     info('')
-    info('未卸载(独立组件,默认保留):')
-    info('  - autocorrect-node(npm 包)')
+    info('未卸载(默认保留):')
     info('  - ~/.claude/zh-fix.log(历史日志)')
     info('  - ~/.claude/settings.json.bak.*(只动我们生成的;你自己的手动备份不会动)')
     info('')
-    info('要把上面这些也一起卸,跑:zhfix uninstall --all')
+    info('要把上面这些也一起清,跑:zhfix uninstall --all')
     if (backupsSaved) {
       info('要连备份也一起清,跑:zhfix uninstall --purge-backups(配合 --all)')
     }
   }
 
   info('')
-  info('不会动的(你的资产):')
-  info('  - 工具源 tool/ 目录(在你的 repo 里)')
+  info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  info('以上清的是"接入 Claude Code"的部分。要删 zhfix 本体(命令 + autocorrect 依赖),再跑:')
+  info('  npm uninstall -g zhfix')
+  info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 }
 
 // ============================================================================
@@ -634,15 +640,17 @@ function cmdHelp() {
   info(`zhfix - 中文标点自动修正工具
 
 用法:
-  zhfix init [tool 路径]       首次配置;tool 路径默认为当前目录
+  zhfix install                首次接入 Claude Code(npm i -g zhfix 之后跑这个)
+  zhfix init [tool 路径]       重新绑定 / 修复配置;tool 路径默认为包自身
   zhfix pause                  暂停当前目录(及子目录)
   zhfix resume                 恢复当前目录的自动处理(撤销之前的 zhfix pause)
   zhfix status                 查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
   zhfix restore <文件>         还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
   zhfix clear-backups [--yes]  清掉所有备份文件
-  zhfix uninstall [--all]      卸载;默认 backups 自动搬到 ~/.zhfix-backups-saved-* 保留
-                               --all 同时卸 autocorrect 等
+  zhfix uninstall [--all]      卸载接入(hook/config/skill);默认 backups 搬到 ~/.zhfix-backups-saved-* 保留
+                               --all 一并清日志和 settings 备份
                                --purge-backups 备份也一并清掉(慎用)
+                               删 zhfix 本体另跑:npm uninstall -g zhfix
   zhfix help                   本帮助
 
 Claude Code 命令(装好后斜杠触发):
@@ -663,6 +671,7 @@ Claude Code 命令(装好后斜杠触发):
 
 const [, , cmd, ...rest] = process.argv
 switch ((cmd || 'help').toLowerCase()) {
+  case 'install':    cmdInstall(rest); break
   case 'init':       cmdInit(rest); break
   case 'pause':      cmdPause(); break
   case 'resume':     cmdResume(); break
