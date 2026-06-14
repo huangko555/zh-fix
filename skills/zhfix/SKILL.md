@@ -122,10 +122,11 @@ node "<tool_root>/zh-fix.mjs" "$TMP"
 ✅ 已改:<file 路径>
 范围:整个文件 / L20-L40(第三段)/ ## 用户故事 那节
 改动:N 处(可以举 1-2 个 before→after 例子,从 backup 和当前文件 diff 出来)
-备份:~/.zhfix/backups/<encoded>.<timestamp>.bak
 
-需要还原:zhfix restore "<file 路径>"
+原文件已备份,不满意可以 `zhfix restore "<file 路径>"` 还原。
 ```
+
+**不要**告诉用户备份的具体路径(他们用 `zhfix restore` 就够了,知道路径反而是噪音)。
 
 ## 别做的事
 

@@ -403,19 +403,63 @@ function cmdRestore(args) {
 }
 
 // ============================================================================
+// zhfix clear-backups [--yes]
+// 清掉 ~/.zhfix/backups/ 里所有 .bak 文件
+// 默认列出 + 提示加 --yes 才真删;--yes 直接删
+// ============================================================================
+function cmdClearBackups(args) {
+  const yes = args.includes('--yes') || args.includes('-y')
+
+  if (!existsSync(BACKUPS_DIR)) {
+    info(`备份目录不存在:${BACKUPS_DIR}`)
+    info('(还没有改过任何文件,所以没备份)')
+    return
+  }
+
+  const files = readdirSync(BACKUPS_DIR).filter(n => n.endsWith('.bak'))
+  if (files.length === 0) {
+    info(`${BACKUPS_DIR} 里没有备份文件`)
+    return
+  }
+
+  let totalSize = 0
+  for (const f of files) {
+    try { totalSize += statSync(join(BACKUPS_DIR, f)).size } catch {}
+  }
+  const sizeMb = (totalSize / 1024 / 1024).toFixed(2)
+
+  info(`备份目录:${BACKUPS_DIR}`)
+  info(`共 ${files.length} 个备份,${sizeMb} MB`)
+
+  if (!yes) {
+    info('')
+    info('要清掉它们,加 --yes:')
+    info('  zhfix clear-backups --yes')
+    return
+  }
+
+  let deleted = 0, failed = 0
+  for (const f of files) {
+    try { unlinkSync(join(BACKUPS_DIR, f)); deleted++ } catch { failed++ }
+  }
+  ok(`已删 ${deleted} 个备份(${failed > 0 ? failed + ' 个失败' : '全部成功'})`)
+}
+
+// ============================================================================
 // zhfix help
 // ============================================================================
 function cmdHelp() {
   info(`zhfix - 中文标点自动修正工具
 
 用法:
-  zhfix init [tool 路径]   首次配置;tool 路径默认为当前目录
-  zhfix pause              暂停当前目录(及子目录)
-  zhfix resume             恢复当前目录
-  zhfix status             查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
-  zhfix restore <文件>     还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
-  zhfix uninstall          卸载工具(留 autocorrect 和 tool 源)
-  zhfix help               本帮助
+  zhfix init [tool 路径]       首次配置;tool 路径默认为当前目录
+  zhfix pause                  暂停当前目录(及子目录)
+  zhfix resume                 恢复当前目录
+  zhfix status                 查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
+  zhfix restore <文件>         还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
+  zhfix clear-backups [--yes]  清掉所有备份文件
+  zhfix uninstall              卸载工具(留 autocorrect 和 tool 源)
+  zhfix help                   本帮助
 
 Claude Code 命令(装好后斜杠触发):
   /zhfix <文件>            把单个 .md/.html 文件用 zh-fix 规则改标点
@@ -440,6 +484,8 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'resume':     cmdResume(); break
   case 'status':     cmdStatus(); break
   case 'restore':    cmdRestore(rest); break
+  case 'clear-backups':
+  case 'clean-backups': cmdClearBackups(rest); break
   case 'uninstall':  cmdUninstall(); break
   case 'help':
   case '--help':
