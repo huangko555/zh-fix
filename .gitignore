@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local TODO(若有人沿用"私人 TODO 在仓库里"的习惯)
 TODO.local.md
+
+# 研究归档(选型/试验/对比/实施计划等过程材料,放本地方便查阅,不入库、不 push、不发版)
+/zh-fix-research-archive/
