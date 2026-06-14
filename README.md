@@ -6,7 +6,7 @@
 
 ## 省流版
 
-**这是什么**:Claude Code 写中文文档 (`.md`/`.html`) 时，自动把里面的半角标点换成全角。
+**这是什么**：Claude Code 写中文文档 (`.md`/`.html`) 时，自动把里面的半角标点换成全角。
 
 **前提**：你用 [Claude Code](https://claude.com/claude-code)。不用 Claude Code 的话，这工具不会自动触发 (可以手动 `node tool/zh-fix.mjs <file>`，但意义不大)。
 
@@ -21,7 +21,7 @@ after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 
 **如何使用**：装完重启 Claude Code,**什么都不用做**。继续正常写文档，工具在后台跑。
 
-**常用命令**:
+**常用命令**：
 
 ```
 zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动
