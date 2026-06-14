@@ -568,7 +568,7 @@ function cmdHelp() {
 用法:
   zhfix init [tool 路径]       首次配置;tool 路径默认为当前目录
   zhfix pause                  暂停当前目录(及子目录)
-  zhfix resume                 恢复当前目录
+  zhfix resume                 恢复当前目录的自动处理(撤销之前的 zhfix pause)
   zhfix status                 查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
   zhfix restore <文件>         还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
   zhfix clear-backups [--yes]  清掉所有备份文件

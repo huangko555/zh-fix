@@ -30,7 +30,7 @@ after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 # 终端(任意位置)
 zhfix status            看 hook 是否启用 + 当前目录是否暂停 + 今日活动
 zhfix pause             当前目录暂停(写英文文档或代码示例时)
-zhfix resume            恢复
+zhfix resume            恢复当前目录(撤销 pause)
 zhfix uninstall         卸载(加 --all 还会卸 autocorrect 和清日志)
 ```
 
@@ -83,7 +83,7 @@ node install/install.mjs
 ```
 zhfix init [tool 路径]           重新绑定 tool 路径(搬目录 / 修配置时用)
 zhfix pause                      暂停当前目录(及子目录)
-zhfix resume                     恢复当前目录
+zhfix resume                     恢复当前目录的自动处理(撤销 pause)
 zhfix status                     看配置 / 暂停列表 / 今日活动
 zhfix restore <文件>             还原指定文件到上次 /zhfix 改之前的备份
 zhfix clear-backups [--yes]      清掉所有"普通备份"(pre-restore 默认保留)

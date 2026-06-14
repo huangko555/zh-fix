@@ -67,7 +67,7 @@ installer 跑完会自己打印一段"使用说明"。你**必须把这段内容
 |---|---|
 | `zhfix status` | 看 hook 是否启用 + 当前目录是否暂停 + 今日活动统计 |
 | `zhfix pause` | 当前目录不想被处理 (英文文档 / 代码示例等),`cd` 过去再跑这条 |
-| `zhfix resume` | 恢复处理 |
+| `zhfix resume` | 恢复当前目录的自动处理(撤销之前的 `zhfix pause`) |
 | `zhfix restore <文件>` | 把指定文件还原到 /zhfix 改之前的备份 |
 | `zhfix uninstall` | 卸载 |
 
