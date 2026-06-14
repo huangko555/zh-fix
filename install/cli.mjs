@@ -130,19 +130,19 @@ function cmdInit(args) {
   ok(`config 已写: ${CONFIG_PATH}`)
   ok(`  tool_root = ${cfg.tool_root}`)
 
-  // hook 路由层放进 ~/.zhfix/(bash hook 会调它);从包内复制一份过去
-  if (existsSync(PKG_HOOK_SRC)) {
-    if (!existsSync(ZHFIX_DIR)) mkdirSync(ZHFIX_DIR, { recursive: true })
-    copyFileSync(PKG_HOOK_SRC, join(ZHFIX_DIR, 'hook.mjs'))
-    ok(`hook 路由: ${join(ZHFIX_DIR, 'hook.mjs')}`)
+  // bash hook 直接指向包内 hook.mjs(随 npm 升级自动跟随)。
+  // 早期做法是拷贝到 ~/.zhfix/hook.mjs,但那样 npm 升级包后拷贝会脱节,故改为指向包内原件。
+  if (!existsSync(PKG_HOOK_SRC)) {
+    fail(`找不到 hook 路由源 ${PKG_HOOK_SRC}(包不完整?)`)
   }
+  const routerBash = toBashPath(PKG_HOOK_SRC)
 
   const hookDir = dirname(HOOK_BASH)
   if (!existsSync(hookDir)) mkdirSync(hookDir, { recursive: true })
   const bashContent = `#!/usr/bin/env bash
 # zh-fix-auto.sh - 由 zhfix init 生成,不要手改
-# 路径解耦版:hook 调用统一进 ~/.zhfix/hook.mjs,后者读 config 找 tool 和 paused list
-ROUTER="$HOME/.zhfix/hook.mjs"
+# hook 调用进包内 hook.mjs,它读 config 找 tool 和 paused list
+ROUTER="${routerBash}"
 [ ! -f "$ROUTER" ] && exit 0
 cat | node "$ROUTER" >/dev/null 2>&1
 exit 0
@@ -176,11 +176,18 @@ exit 0
 // = preflight + init(自动用包内 tool) + 一段使用说明
 // ============================================================================
 function cmdInstall(args) {
-  // Windows 上 bash hook 强依赖 Git Bash,先探测
+  // Windows 上 bash hook 强依赖 Git Bash,先探测。
+  // 要排除 WSL 的 System32\bash.exe —— 它把盘符当 /mnt/c,跟我们写的 /c/... hook 路径不兼容
   if (IS_WIN) {
     const bashCheck = spawnSync('cmd.exe', ['/d', '/s', '/c', 'where', 'bash'], { encoding: 'utf-8', shell: false })
-    if (bashCheck.status !== 0 || !bashCheck.stdout) {
-      fail(`Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
+    const bashPaths = (bashCheck.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    const gitBash = bashPaths.find(p => !/\\System32\\bash\.exe$/i.test(p))
+    if (!gitBash) {
+      fail(bashPaths.length > 0
+        ? `检测到的 bash 是 WSL 的(System32\\bash.exe),它的路径风格(/mnt/c/...)跟 hook 用的 Git Bash(/c/...)不兼容。
+请装 Git for Windows:https://git-scm.com/download/win
+装完重开终端再跑 zhfix install。`
+        : `Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
 请先装 Git for Windows:https://git-scm.com/download/win
 装完重开终端再跑 zhfix install。`)
     }

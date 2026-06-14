@@ -43,11 +43,16 @@ if (!existsSync(join(TOOL_ROOT, 'zh-fix.mjs'))) {
 }
 ok(`tool 源代码就位`)
 
-// Windows 上 bash hook 强依赖 Git Bash,先检测
+// Windows 上 bash hook 强依赖 Git Bash,先检测(排除 WSL 的 System32\bash.exe,路径风格不兼容)
 if (IS_WIN) {
   const bashCheck = spawnSync('cmd.exe', ['/d', '/s', '/c', 'where', 'bash'], { encoding: 'utf-8', shell: false })
-  if (bashCheck.status !== 0 || !bashCheck.stdout) {
-    fail(`Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
+  const bashPaths = (bashCheck.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+  const gitBash = bashPaths.find(p => !/\\System32\\bash\.exe$/i.test(p))
+  if (!gitBash) {
+    fail(bashPaths.length > 0
+      ? `检测到的 bash 是 WSL 的(System32\\bash.exe),路径风格跟 hook 用的 Git Bash 不兼容。
+请装 Git for Windows:https://git-scm.com/download/win`
+      : `Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
 请先装 Git for Windows:https://git-scm.com/download/win
 装完重开终端再跑安装器。`)
   }
