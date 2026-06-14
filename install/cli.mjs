@@ -641,6 +641,18 @@ function cmdClearBackups(args) {
 }
 
 // ============================================================================
+// zhfix version / --version / -v
+// ============================================================================
+function cmdVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf-8'))
+    info(`zhfix ${pkg.version}`)
+  } catch {
+    info('zhfix(版本未知)')
+  }
+}
+
+// ============================================================================
 // zhfix help
 // ============================================================================
 function cmdHelp() {
@@ -658,6 +670,7 @@ function cmdHelp() {
                                --all 一并清日志和 settings 备份
                                --purge-backups 备份也一并清掉(慎用)
                                删 zhfix 本体另跑:npm uninstall -g zhfix
+  zhfix version                查看当前版本号
   zhfix help                   本帮助
 
 Claude Code 命令(装好后斜杠触发):
@@ -687,6 +700,9 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'clear-backups':
   case 'clean-backups': cmdClearBackups(rest); break
   case 'uninstall':  cmdUninstall(rest); break
+  case 'version':
+  case '--version':
+  case '-v':         cmdVersion(); break
   case 'help':
   case '--help':
   case '-h':         cmdHelp(); break
