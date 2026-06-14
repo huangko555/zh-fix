@@ -23,11 +23,21 @@ after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 
 **常用命令**：
 
+**终端命令**(装好后任意位置可用):
+
 ```
-zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动
-zhfix pause      当前目录不想被处理(英文文档/代码示例等)
-zhfix resume     恢复处理
-zhfix uninstall  卸载
+zhfix status            看 hook 是否启用 + 当前目录是否暂停 + 今日活动
+zhfix pause             当前目录不想被处理(英文文档/代码示例等)
+zhfix resume            恢复处理
+zhfix restore <文件>    把指定文件还原到 /zhfix 改之前的备份
+zhfix uninstall         卸载
+```
+
+**Claude Code 斜杠命令**(在 Claude Code 里):
+
+```
+/zhfix <文件>           把单个 .md/.html 用 zh-fix 规则改一遍
+                       (改前自动备份;说"改 prd.md 的标点"也会主动触发)
 ```
 
 > 出问题了？→ 见 [`tool/EMERGENCY-OFF.md`](tool/EMERGENCY-OFF.md)，或直接 `zhfix uninstall`。

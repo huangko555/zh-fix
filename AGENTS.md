@@ -68,16 +68,26 @@ installer 跑完会自己打印一段"使用说明"。你**必须把这段内容
 | `zhfix status` | 看 hook 是否启用 + 当前目录是否暂停 + 今日活动统计 |
 | `zhfix pause` | 当前目录不想被处理 (英文文档 / 代码示例等),`cd` 过去再跑这条 |
 | `zhfix resume` | 恢复处理 |
+| `zhfix restore <文件>` | 把指定文件还原到 /zhfix 改之前的备份 |
 | `zhfix uninstall` | 卸载 |
 
-### 4. 出问题怎么办
+### 4. Claude Code 斜杠命令(改单个已有文档)
+
+`/zhfix <文件>` —— 把单个 `.md/.html` 文件用 zh-fix 规则改一遍标点。
+也可以自然语言触发,例如:**"帮我把 prd.md 改成中文标点"**、**"改一下 docs/api.md 的半角逗号"**。
+
+- 改前自动备份到 `~/.zhfix/backups/`,事后用 `zhfix restore` 还原
+- 必须指定单个文件,不接受目录或批量
+- 必须明确提到"标点 / 全角 / 半角 / 逗号 / 句号" 等关键词才主动触发(避免对"改一下"这种泛改请求误触发)
+
+### 5. 出问题怎么办
 
 - 日志在 `~/.claude/zh-fix.log`，每次工具跑都会记一行，可以 trace
 - 紧急关闭：看 `tool/EMERGENCY-OFF.md`
 
-### 5. **提醒用户重启 Claude Code**
+### 6. **提醒用户重启 Claude Code**
 
-不重启 hook 不生效。这是装完唯一需要他做的事。
+不重启 hook 不生效,`/zhfix` skill 也是。这是装完唯一需要他做的事。
 
 ## 常见问题
 

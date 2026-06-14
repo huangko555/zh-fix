@@ -7,18 +7,20 @@
 process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.code !== 'DEP0190') console.warn(w) })
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { join, dirname, resolve as resolvePath } from 'node:path'
+import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 
 const IS_WIN = process.platform === 'win32'
 const HOME = homedir()
 const ZHFIX_DIR = join(HOME, '.zhfix')
 const CONFIG_PATH = join(ZHFIX_DIR, 'config.json')
+const BACKUPS_DIR = join(ZHFIX_DIR, 'backups')
 const HOOK_BASH = join(HOME, '.claude', 'hooks', 'zh-fix-auto.sh')
 const SETTINGS_JSON = join(HOME, '.claude', 'settings.json')
 const LOG_PATH = join(HOME, '.claude', 'zh-fix.log')
+const SKILL_DIR = join(HOME, '.claude', 'skills', 'zhfix')
 
 // PATH 安装位置:用 npm 全局 bin(已经在 PATH 里)
 function getNpmBin() {
@@ -104,8 +106,18 @@ exit 0
     info(`  替代:用 node ${join(ZHFIX_DIR, 'cli.mjs')} <command>`)
   }
 
+  // 装 /zhfix skill 到 ~/.claude/skills/zhfix/
+  const skillSrc = join(toolRoot, '..', 'skills', 'zhfix', 'SKILL.md')
+  if (existsSync(skillSrc)) {
+    if (!existsSync(SKILL_DIR)) mkdirSync(SKILL_DIR, { recursive: true })
+    copyFileSync(skillSrc, join(SKILL_DIR, 'SKILL.md'))
+    ok(`/zhfix skill 已装:${SKILL_DIR}`)
+  } else {
+    warn(`找不到 skills/zhfix/SKILL.md(在 ${skillSrc}),skill 跳过`)
+  }
+
   info('')
-  info('🎉 安装完成。重启 Claude Code 让 hook 生效。')
+  info('🎉 安装完成。重启 Claude Code 让 hook 和 /zhfix 命令都生效。')
   info('   测试:zhfix status')
 }
 
@@ -319,6 +331,11 @@ function cmdUninstall() {
     try { rmSync(ZHFIX_DIR, { recursive: true, force: true }); removed.push(ZHFIX_DIR) } catch {}
   }
 
+  // 删 /zhfix skill
+  if (existsSync(SKILL_DIR)) {
+    try { rmSync(SKILL_DIR, { recursive: true, force: true }); removed.push(SKILL_DIR) } catch {}
+  }
+
   info('')
   ok('已卸载:')
   removed.forEach(r => info('  - ' + r))
@@ -327,6 +344,62 @@ function cmdUninstall() {
   info('  - autocorrect-node(npm 包)→ npm uninstall -g autocorrect-node')
   info('  - 工具源 tool/ 目录(zh-fix.mjs 等)→ 你自己留着或删')
   info('  - zh-fix.log(~/.claude/zh-fix.log)→ 留着可查历史')
+}
+
+// ============================================================================
+// zhfix restore <file>
+// 还原指定文件到最近的备份(由 /zhfix skill 在改之前自动生成)
+// 备份命名:~/.zhfix/backups/<encoded_abs_path>.<timestamp>.bak
+// 路径编码:绝对路径里的 / \ : 都替换成 _
+// ============================================================================
+function encodePathForBackup(absPath) {
+  return absPath.replace(/[\/\\:]/g, '_')
+}
+
+function cmdRestore(args) {
+  const fileArg = args[0]
+  if (!fileArg) fail(`用法:zhfix restore <文件路径>`)
+
+  const fileAbs = resolvePath(fileArg)
+  if (!existsSync(BACKUPS_DIR)) fail(`没找到备份目录 ${BACKUPS_DIR}`)
+
+  const encoded = encodePathForBackup(fileAbs)
+  // glob 等价:列 backups 里以 <encoded>. 开头、.bak 结尾的
+  let entries
+  try { entries = readdirSync(BACKUPS_DIR) } catch { fail(`读不到备份目录`) }
+  const matches = entries.filter(n => n.startsWith(encoded + '.') && n.endsWith('.bak'))
+  if (matches.length === 0) {
+    fail(`没找到 ${fileAbs} 的备份(查 ${BACKUPS_DIR} 看看,或者没改过这个文件)`)
+  }
+
+  // 按时间戳排序(文件名格式:<encoded>.<YYYYMMDD-HHMMSS>.bak)
+  matches.sort((a, b) => {
+    const ta = a.slice(encoded.length + 1, -4)
+    const tb = b.slice(encoded.length + 1, -4)
+    return tb.localeCompare(ta)
+  })
+  const latest = join(BACKUPS_DIR, matches[0])
+
+  // 还原前再备份当前状态(以防误用 restore)
+  const ts = new Date().toISOString().replace(/[:.T-]/g, '').slice(0, 14)
+  const preRestoreName = `${encoded}.${ts.slice(0,8)}-${ts.slice(8,14)}.pre-restore.bak`
+  try {
+    if (existsSync(fileAbs)) {
+      copyFileSync(fileAbs, join(BACKUPS_DIR, preRestoreName))
+    }
+  } catch (e) {
+    warn(`pre-restore 备份失败(继续):${e.message}`)
+  }
+
+  // 复制 latest 到原文件位置
+  try {
+    copyFileSync(latest, fileAbs)
+    ok(`已还原:${fileAbs}`)
+    info(`  来源备份:${latest}`)
+    info(`  本次操作前已存:${preRestoreName}(再次 restore 可回到这一刻)`)
+  } catch (e) {
+    fail(`还原失败:${e.message}`)
+  }
 }
 
 // ============================================================================
@@ -340,11 +413,17 @@ function cmdHelp() {
   zhfix pause              暂停当前目录(及子目录)
   zhfix resume             恢复当前目录
   zhfix status             查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
+  zhfix restore <文件>     还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
   zhfix uninstall          卸载工具(留 autocorrect 和 tool 源)
   zhfix help               本帮助
 
+Claude Code 命令(装好后斜杠触发):
+  /zhfix <文件>            把单个 .md/.html 文件用 zh-fix 规则改标点
+                          (备份再改,可用 zhfix restore 还原)
+
 配置:
   ~/.zhfix/config.json     tool_root + paused_paths
+  ~/.zhfix/backups/        skill 改文件前的备份
 
 日志:
   ~/.claude/zh-fix.log     每次 hook 跑都记一行
@@ -360,6 +439,7 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'pause':      cmdPause(); break
   case 'resume':     cmdResume(); break
   case 'status':     cmdStatus(); break
+  case 'restore':    cmdRestore(rest); break
   case 'uninstall':  cmdUninstall(); break
   case 'help':
   case '--help':
