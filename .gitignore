@@ -1,0 +1,31 @@
+node_modules/
+package-lock.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local test / runtime artifacts
+/tmp/
+*.tmp
+*.log
+*.bak
+*.bak.*
+
+# Claude Code project-level config(若有人在本仓库内开 Claude Code,生成的本地配置不该入库)
+.claude/
+
+# Local TODO(若有人沿用"私人 TODO 在仓库里"的习惯)
+TODO.local.md
