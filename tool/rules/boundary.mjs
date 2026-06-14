@@ -60,16 +60,30 @@ export function applyBoundaryRule(text, masked) {
     }
     if (!CLOSING_CHARS.has(leftCh)) continue
 
-    // 右侧第一个非空白字符是 CJK 才触发
+    // 右侧第一个非空白字符是 CJK → 直接触发
     let rightCh = ''
     for (let j = i + 1; j < n; j++) {
       const c = maskedChars[j]
-      if (c === '\x00') break  // 进入跳过区
+      if (c === '\x00') break
       if (/\s/.test(c)) continue
       rightCh = c
       break
     }
-    if (!CJK.test(rightCh)) continue
+    const rightIsCjk = CJK.test(rightCh)
+
+    // 右侧不是 CJK 时,看左侧近距离(50 字内)有没有 CJK
+    // 处理 `**中文**:English` 这种"中文加粗后接半角再接英文"的常见模式
+    let leftHasNearbyCjk = false
+    if (!rightIsCjk) {
+      const lookback = Math.max(0, i - 50)
+      for (let j = i - 1; j >= lookback; j--) {
+        const c = maskedChars[j]
+        if (c === '\x00') continue  // 穿过 mask 区继续找
+        if (CJK.test(c)) { leftHasNearbyCjk = true; break }
+      }
+    }
+
+    if (!rightIsCjk && !leftHasNearbyCjk) continue
 
     chars[i] = HALF_TO_FULL[ch]
   }
