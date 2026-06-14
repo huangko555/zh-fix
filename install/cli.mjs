@@ -286,10 +286,13 @@ function checkHookRegistered() {
 }
 
 // ============================================================================
-// zhfix uninstall
+// zhfix uninstall [--all]
+// 默认只卸 zhfix 本体
+// --all 还会一并卸 autocorrect-node、删 log、删 settings.json 时间戳备份
 // ============================================================================
-function cmdUninstall() {
-  info('卸载 zhfix...')
+function cmdUninstall(args) {
+  const all = args.includes('--all') || args.includes('-a')
+  info(all ? '卸载 zhfix 全套(含独立组件)...' : '卸载 zhfix 本体...')
   const removed = []
 
   if (existsSync(SETTINGS_JSON)) {
@@ -336,14 +339,51 @@ function cmdUninstall() {
     try { rmSync(SKILL_DIR, { recursive: true, force: true }); removed.push(SKILL_DIR) } catch {}
   }
 
+  // --all:一并卸独立组件
+  if (all) {
+    // autocorrect-node 全局 npm 包
+    info('卸 autocorrect-node 全局 npm 包...')
+    const npmRes = IS_WIN
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', 'uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
+      : spawnSync('npm', ['uninstall', '-g', 'autocorrect-node'], { stdio: 'ignore', shell: false })
+    if (npmRes.status === 0) {
+      removed.push('autocorrect-node(npm 全局包)')
+    } else {
+      warn(`autocorrect-node 卸载失败(也许本来就没装),跳过`)
+    }
+    // log
+    if (existsSync(LOG_PATH)) {
+      try { unlinkSync(LOG_PATH); removed.push(LOG_PATH) } catch {}
+    }
+    // settings.json 时间戳备份
+    try {
+      const claudeDir = dirname(SETTINGS_JSON)
+      const bakFiles = readdirSync(claudeDir).filter(n => n.startsWith('settings.json.bak'))
+      for (const f of bakFiles) {
+        try { unlinkSync(join(claudeDir, f)); removed.push(join(claudeDir, f)) } catch {}
+      }
+    } catch {}
+  }
+
   info('')
   ok('已卸载:')
   removed.forEach(r => info('  - ' + r))
+
+  if (!all) {
+    info('')
+    info('未卸载(独立组件,默认保留):')
+    info('  - autocorrect-node(npm 包)')
+    info('  - ~/.claude/zh-fix.log(历史日志)')
+    info('  - ~/.claude/settings.json.bak.*(自动备份)')
+    info('')
+    info('要把上面这些也一起卸,跑:zhfix uninstall --all')
+  }
+
   info('')
-  info('未自动卸载(独立组件,留给你手动决定):')
-  info('  - autocorrect-node(npm 包)→ npm uninstall -g autocorrect-node')
-  info('  - 工具源 tool/ 目录(zh-fix.mjs 等)→ 你自己留着或删')
-  info('  - zh-fix.log(~/.claude/zh-fix.log)→ 留着可查历史')
+  info('不会动的(你的资产):')
+  info('  - 工具源 tool/ 目录(在你的 repo 里)')
+  info('  - ~/.zhfix/backups/ 已经在 zhfix uninstall 时随 ~/.zhfix/ 一起删了')
+  info('    (如果你想保留改文件的备份,提前 cp 出来)')
 }
 
 // ============================================================================
@@ -458,7 +498,7 @@ function cmdHelp() {
   zhfix status                 查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
   zhfix restore <文件>         还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
   zhfix clear-backups [--yes]  清掉所有备份文件
-  zhfix uninstall              卸载工具(留 autocorrect 和 tool 源)
+  zhfix uninstall [--all]      卸载;默认只卸 zhfix 本体,--all 同时卸 autocorrect 等
   zhfix help                   本帮助
 
 Claude Code 命令(装好后斜杠触发):
@@ -486,7 +526,7 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'restore':    cmdRestore(rest); break
   case 'clear-backups':
   case 'clean-backups': cmdClearBackups(rest); break
-  case 'uninstall':  cmdUninstall(); break
+  case 'uninstall':  cmdUninstall(rest); break
   case 'help':
   case '--help':
   case '-h':         cmdHelp(); break
