@@ -6,9 +6,15 @@
 
 import { CJK } from './cjk.mjs'
 
+// 文案属性白名单(给用户看的 UI 文字)。导出供 zh-fix.mjs 回填层复用,保持单一来源。
+export const ATTR_WHITELIST = new Set(['placeholder', 'title', 'alt', 'aria-label'])
+
 const HALF_TO_FULL = { ',': '，', '.': '。', ':': '：', ';': '；', '!': '！', '?': '？' }
 // (?<![-\w]) 防 data-placeholder / ng-title 这类带前缀属性被误匹配
-const ATTR_RE = /(?<![-\w])(placeholder|title|alt|aria-label)(\s*=\s*)(["'])([\s\S]*?)\3/gi
+const ATTR_RE = new RegExp(
+  `(?<![-\\w])(${[...ATTR_WHITELIST].join('|')})(\\s*=\\s*)(["'])([\\s\\S]*?)\\3`,
+  'gi'
+)
 
 // 半角标点左或右紧邻 CJK → 全角(只动中文语境的,放过 50,000 千分位、report.pdf 这类)
 function fixText(val) {

@@ -641,6 +641,58 @@ function cmdClearBackups(args) {
 }
 
 // ============================================================================
+// zhfix update
+// 把全局 zhfix 升到 npm 最新版,再用新代码重新接入(刷新 hook/settings/skill)。
+//   - config.tool_root 和 hook 包装都指向"包内稳定路径",随 npm 升级自动跟随;
+//   - 但 /zhfix skill 是装时拷到 ~/.claude/skills/ 的副本,npm 升级不会动它 —— 必须重接入才更新。
+// ============================================================================
+function runNpm(npmArgs) {
+  return IS_WIN
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm', ...npmArgs], { stdio: 'inherit', shell: false })
+    : spawnSync('npm', npmArgs, { stdio: 'inherit', shell: false })
+}
+
+function runZhfix(zhfixArgs) {
+  return IS_WIN
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'zhfix', ...zhfixArgs], { stdio: 'inherit', shell: false })
+    : spawnSync(getZhfixCmdPath() || 'zhfix', zhfixArgs, { stdio: 'inherit', shell: false })
+}
+
+function cmdUpdate() {
+  // 升级前记下当前 tool_root:若是开发模式(指向 repo,非包内 tool/),update 不该把它重置回包内
+  const cfgBefore = readConfig()
+  const devToolRoot =
+    cfgBefore && normalizePath(cfgBefore.tool_root) !== normalizePath(PKG_TOOL)
+      ? cfgBefore.tool_root
+      : null
+  if (devToolRoot) {
+    warn(`检测到开发模式(tool_root 指向 ${devToolRoot},不是 npm 包内)。`)
+    warn(`update 只升级 npm 包并保留你的 tool_root;开发模式下通常直接改 repo 即可,不必 update。`)
+  }
+
+  info('正在把 zhfix 升到最新版(npm i -g zhfix@latest)...')
+  const up = runNpm(['i', '-g', 'zhfix@latest'])
+  if (up.status !== 0) {
+    fail(`npm 升级失败(退出码 ${up.status ?? '未知'})。可手动跑:npm i -g zhfix@latest`)
+  }
+  ok('npm 包已升到最新版')
+
+  // 用升级后的新 cli 重新接入,刷新 hook 包装 / settings / skill 副本 / config。
+  // 开发模式下把原 tool_root 传回去,避免被重置。
+  info('')
+  info('正在刷新 Claude Code 接入(hook / settings / skill)...')
+  const initArgs = devToolRoot ? ['init', devToolRoot] : ['init']
+  const re = runZhfix(initArgs)
+  if (re.status !== 0) {
+    warn(`接入刷新失败(退出码 ${re.status ?? '未知'})。可手动跑:zhfix init`)
+  }
+
+  info('')
+  ok('更新完成。')
+  info('⚠️  重启 Claude Code,让新版 hook 和 /zhfix skill 生效。')
+}
+
+// ============================================================================
 // zhfix version / --version / -v
 // ============================================================================
 function cmdVersion() {
@@ -670,6 +722,7 @@ function cmdHelp() {
                                --all 一并清日志和 settings 备份
                                --purge-backups 备份也一并清掉(慎用)
                                删 zhfix 本体另跑:npm uninstall -g zhfix
+  zhfix update                 升级到 npm 最新版并刷新接入(hook/settings/skill),之后重启 Claude Code
   zhfix version                查看当前版本号
   zhfix help                   本帮助
 
@@ -700,6 +753,8 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'clear-backups':
   case 'clean-backups': cmdClearBackups(rest); break
   case 'uninstall':  cmdUninstall(rest); break
+  case 'update':
+  case 'upgrade':    cmdUpdate(); break
   case 'version':
   case '--version':
   case '-v':         cmdVersion(); break

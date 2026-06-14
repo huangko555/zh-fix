@@ -91,6 +91,7 @@ zhfix pause / resume         暂停 / 恢复当前目录
 zhfix status                 看状态 + 今日活动
 zhfix restore <文件>         还原文件到 /zhfix 改之前的备份
 zhfix clear-backups [--yes]  清理备份
+zhfix update                 升级到最新版并刷新接入(之后重启 Claude Code)
 zhfix uninstall [--all]      卸载接入(本体另跑 npm uninstall -g zhfix)
 zhfix help                   帮助
 ```

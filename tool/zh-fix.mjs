@@ -26,7 +26,7 @@ import { computeMaskedText } from './mask.mjs'
 import { applySemicolonRule } from './rules/semicolon.mjs'
 import { applyBoundaryRule } from './rules/boundary.mjs'
 import { applyCjkSurroundRule } from './rules/cjk-surround.mjs'
-import { applyAttrTextRule } from './rules/attr-text.mjs'
+import { applyAttrTextRule, ATTR_WHITELIST } from './rules/attr-text.mjs'
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024
 const TIMEOUT_MS = 8000
@@ -133,21 +133,68 @@ function hasOptOut(text) {
   return /<!--\s*zh-fix:\s*off\s*-->/.test(head) || /^\s*<!--\s*zh-fix\s+disabled\s*-->/m.test(head)
 }
 
-// autocorrect 会越界改 fenced code / <script> / <style> / <pre> / <code> 里的中文标点。
-// 利用"autocorrect 不改块边界标记"——块的数量/顺序在原文和 autocorrect 后一致,逐块用原文回填。
-// 数量对不上(理论上不该发生)就保守跳过,退化为现状并记日志。
-const BLOCK_RE = /```[\s\S]*?```|~~~[\s\S]*?~~~|<(script|style|pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi
+// autocorrect 会越界改"跳过区"(代码块 / script|style|pre|code / 行内 code / HTML 注释 /
+// 内联 HTML 属性值)里的中文标点。mask 只挡住"我们自己的补丁",对 autocorrect 不生效,
+// 所以要在 autocorrect 之后,用原文把这些区回填回来。
+//
+// 原理:这些区的"分隔符"(``` / ~~~ / 标签 / <!-- --> / 反引号 / 属性名+引号)autocorrect
+// 不会改,于是区的数量/顺序在原文和 autocorrect 后一致 —— 按出现顺序逐区用原文替换即可。
+// 数量对不上(理论上不该发生)就保守跳过该类回填,记日志。
 
-function restoreCodeBlocks(original, afterAc) {
-  const orig = original.match(BLOCK_RE)
+// 永远整段回填:围栏块 / ~~~ / script|style|pre|code 块 / HTML 注释 / 行内 code(含双反引号)。
+// 注意分支顺序:块级在前,leftmost-alternation 保证 <script> 内的反引号/注释不被单独二次匹配。
+const ALWAYS_RESTORE_RE =
+  /```[\s\S]*?```|~~~[\s\S]*?~~~|<(script|style|pre|code)\b[^>]*>[\s\S]*?<\/\1>|<!--[\s\S]*?-->|(`+)[\s\S]*?\2/gi
+
+// 标签 + 标签内属性。属性值按"非白名单回填原文、白名单保留 autocorrect 值(留住盘古空格)"。
+const TAG_RE = /<\/?[a-zA-Z][^>]*>/g
+const ATTR_RE = /(\s[\w-]+)(\s*=\s*)(["'])((?:(?!\3)[\s\S])*?)\3/g
+
+// 按出现顺序逐段回填(整段替换);decide(原段) 决定回填成什么。
+function restoreByOrder(original, afterAc, re, label) {
+  const orig = original.match(re)
   if (!orig) return afterAc
-  const ac = afterAc.match(BLOCK_RE)
+  const ac = afterAc.match(re)
   if (!ac || ac.length !== orig.length) {
-    logLine(`BLOCK_MISMATCH orig=${orig.length} ac=${ac ? ac.length : 0}: 跳过代码块回填`)
+    logLine(`RESTORE_MISMATCH(${label}) orig=${orig.length} ac=${ac ? ac.length : 0}: 跳过回填`)
     return afterAc
   }
   let i = 0
-  return afterAc.replace(BLOCK_RE, () => orig[i++])
+  return afterAc.replace(re, () => orig[i++])
+}
+
+// 内联 HTML 属性值:在每个标签内,把非白名单属性的值换回原值,白名单保留 autocorrect 结果。
+function restoreNonWhitelistAttrs(original, afterAc) {
+  const origTags = original.match(TAG_RE)
+  if (!origTags) return afterAc
+  const acTags = afterAc.match(TAG_RE)
+  if (!acTags || acTags.length !== origTags.length) {
+    logLine(`ATTR_TAG_MISMATCH orig=${origTags.length} ac=${acTags ? acTags.length : 0}: 跳过属性回填`)
+    return afterAc
+  }
+  let t = 0
+  return afterAc.replace(TAG_RE, (acTag) => {
+    const origTag = origTags[t++]
+    // 收集原 tag 里各属性的原值(顺序与 acTag 一致,autocorrect 不重排属性)
+    const origVals = []
+    let a
+    ATTR_RE.lastIndex = 0
+    while ((a = ATTR_RE.exec(origTag)) !== null) origVals.push(a[4])
+    let k = 0
+    ATTR_RE.lastIndex = 0
+    return acTag.replace(ATTR_RE, (m, name, eq, q) => {
+      const origVal = origVals[k++]
+      if (origVal === undefined) return m
+      if (ATTR_WHITELIST.has(name.trim().toLowerCase())) return m // 白名单保留 AC 值
+      return `${name}${eq}${q}${origVal}${q}` // 非白名单回填原值
+    })
+  })
+}
+
+function restoreSkipRegions(original, afterAc) {
+  let out = restoreByOrder(original, afterAc, ALWAYS_RESTORE_RE, 'blocks')
+  out = restoreNonWhitelistAttrs(original, out)
+  return out
 }
 
 function applyPatches(text) {
@@ -226,8 +273,8 @@ async function main() {
     logLine(`AC_FAIL ${filePath}: ${acRes.reason}`)
     process.exit(0)
   }
-  // 把 autocorrect 越界改的代码块/script/style 回填回原文
-  const afterAc = restoreCodeBlocks(text, acRes.text)
+  // 把 autocorrect 越界改的跳过区(代码块/script/style/行内码/注释/非白名单属性)回填回原文
+  const afterAc = restoreSkipRegions(text, acRes.text)
 
   // 我们的补丁
   const patched = applyPatches(afterAc)

@@ -1,6 +1,6 @@
 {
   "name": "zhfix",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Auto-fix Chinese (CJK) punctuation in Markdown / HTML files written by Claude Code or any AI agent — a thin wrapper on top of AutoCorrect.",
   "keywords": [
     "autocorrect",
