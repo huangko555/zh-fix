@@ -11,7 +11,7 @@ before: 你好,世界.这是一个测试,带边界(英文),还有.
 after:  你好，世界。这是一个测试，带边界 (英文)，还有。
 ```
 
-需要 [Claude Code](https://claude.com/claude-code)——它是 Claude Code 的一个 PostToolUse hook，没有 Claude Code 不会触发。
+需要 [Claude Code](https://claude.com/claude-code)——它是 Claude Code 的一个 hook，没有 Claude Code 不会触发。
 
 ## 安装
 
@@ -30,7 +30,7 @@ zhfix install      # 接入 Claude Code
 
 ## 怎么用
 
-平时不用管，照常写文档就行，每次保存 `.md` / `.html` 后自动处理。
+平时不用管，照常写文档就行，每次写 `.md` / `.html` 都会自动处理。
 
 需要时也能主动调：
 

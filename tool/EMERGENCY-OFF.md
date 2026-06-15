@@ -1,6 +1,6 @@
 # 紧急关闭 zh-fix(三步)
 
-如果 zh-fix 改坏了某份文档、或者出现你不确定的行为，**立即停用**:
+如果 zh-fix 改坏了某份文档、或者出现你不确定的行为，**立即停用**：
 
 ## 方法 1:zhfix 命令 (最简，无脑)
 
@@ -32,7 +32,7 @@ zhfix pause
 
 ## 方法 4:手动改 settings.json(没有 zhfix 命令时)
 
-打开 `~/.claude/settings.json`，删 `hooks.PostToolUse` 里包含 `zh-fix-auto.sh` 的那一项。
+打开 `~/.claude/settings.json`，删 `hooks.PreToolUse`（0.2.0+）或 `hooks.PostToolUse`（0.1.x）里包含 `zh-fix-auto.sh` 的那一项。
 重启 Claude Code。
 
 ---

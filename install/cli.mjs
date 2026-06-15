@@ -54,7 +54,7 @@ const SKILL_DIR = join(HOME, '.claude', 'skills', 'zhfix')
 // 不写死任何机器路径,靠 import.meta.url 让包自己定位自己。
 const PKG_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const PKG_TOOL = join(PKG_ROOT, 'tool')
-const PKG_HOOK_SRC = join(PKG_ROOT, 'install', 'hook.mjs')
+const PKG_HOOK_SRC = join(PKG_ROOT, 'install', 'pre-hook.mjs')
 const PKG_SKILL_SRC = join(PKG_ROOT, 'skills', 'zhfix', 'SKILL.md')
 
 // PATH 安装位置:用 npm 全局 bin(已经在 PATH 里)
@@ -125,13 +125,13 @@ function cmdInit(args) {
     tool_root: normalizePath(toolRoot),
     paused_paths: existing.paused_paths || [],
     version: 1,
+    protocol_version: 2,  // 2 = PreToolUse(0.2.0+);1 = PostToolUse(0.1.x,已淘汰)
   }
   writeConfig(cfg)
   ok(`config 已写: ${CONFIG_PATH}`)
   ok(`  tool_root = ${cfg.tool_root}`)
 
-  // bash hook 直接指向包内 hook.mjs(随 npm 升级自动跟随)。
-  // 早期做法是拷贝到 ~/.zhfix/hook.mjs,但那样 npm 升级包后拷贝会脱节,故改为指向包内原件。
+  // bash hook 直接指向包内 pre-hook.mjs(0.2.0+;0.1.x 是 hook.mjs)。随 npm 升级自动跟随。
   if (!existsSync(PKG_HOOK_SRC)) {
     fail(`找不到 hook 路由源 ${PKG_HOOK_SRC}(包不完整?)`)
   }
@@ -139,20 +139,22 @@ function cmdInit(args) {
 
   const hookDir = dirname(HOOK_BASH)
   if (!existsSync(hookDir)) mkdirSync(hookDir, { recursive: true })
+  // 标准 stdout 必须保留(PreToolUse 用 stdout 输出 hookSpecificOutput);只把 stderr 吃掉防污染
   const bashContent = `#!/usr/bin/env bash
 # zh-fix-auto.sh - 由 zhfix init 生成,不要手改
-# hook 调用进包内 hook.mjs,它读 config 找 tool 和 paused list
+# 把 PreToolUse 的 stdin 喂给包内 pre-hook.mjs,它的 stdout 是 hookSpecificOutput JSON
 ROUTER="${routerBash}"
 [ ! -f "$ROUTER" ] && exit 0
-cat | node "$ROUTER" >/dev/null 2>&1
+cat | node "$ROUTER" 2>/dev/null
 exit 0
 `
   writeFileSync(HOOK_BASH, bashContent, 'utf-8')
   if (!IS_WIN) { try { chmodSync(HOOK_BASH, 0o755) } catch {} }
   ok(`bash hook: ${HOOK_BASH}`)
 
-  installPostToolUseHook()
-  ok(`settings.json PostToolUse 已配`)
+  // 迁移 + 装:先清掉 0.1.x 残留的 PostToolUse zh-fix 条目,再装 PreToolUse
+  installPreToolUseHook()
+  ok(`settings.json PreToolUse 已配(0.1.x PostToolUse 注册已自动清理)`)
 
   // zhfix 命令由 npm bin 提供(npm i -g zhfix 时自动挂到 PATH),这里不再手写 shim
 
@@ -219,7 +221,23 @@ function cmdInstall(args) {
   info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 }
 
-function installPostToolUseHook() {
+// 共享:settings.json 里 hooks.<event> 数组中,把所有"hooks[].command 含 zh-fix-auto.sh"的
+// 子项删掉;清空 hooks 数组的 entry 一并丢弃。返回是否动过。
+function stripZhfixHookEntries(settings, event) {
+  const arr = settings?.hooks?.[event]
+  if (!Array.isArray(arr)) return false
+  const before = JSON.stringify(arr)
+  settings.hooks[event] = arr
+    .map(e => ({
+      ...e,
+      hooks: (e.hooks || []).filter(h => !(typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh'))),
+    }))
+    .filter(e => e.hooks && e.hooks.length > 0)
+  if (settings.hooks[event].length === 0) delete settings.hooks[event]
+  return JSON.stringify(settings?.hooks?.[event] ?? []) !== before
+}
+
+function installPreToolUseHook() {
   let settings = {}
   if (existsSync(SETTINGS_JSON)) {
     // 备份带时间戳,避免重跑 init 时覆盖之前的备份
@@ -228,7 +246,6 @@ function installPostToolUseHook() {
     try { settings = JSON.parse(readFileSync(SETTINGS_JSON, 'utf-8')) } catch {
       fail(`settings.json 解析失败,请先手动修复: ${SETTINGS_JSON}`)
     }
-    // C2 修:settings.json 必须是 plain object,不能是 array/null/primitive
     if (typeof settings !== 'object' || Array.isArray(settings) || settings === null) {
       fail(`settings.json 必须是 JSON 对象(当前是 ${Array.isArray(settings) ? 'array' : typeof settings}),无法 merge hook。请检查 ${SETTINGS_JSON}`)
     }
@@ -236,25 +253,30 @@ function installPostToolUseHook() {
     const sdir = dirname(SETTINGS_JSON)
     if (!existsSync(sdir)) mkdirSync(sdir, { recursive: true })
   }
+
+  // 0.2.0 迁移:先清掉 0.1.x 残留的 PostToolUse zh-fix 注册(同 wrapper 路径,避免双挂)
   settings.hooks ||= {}
-  settings.hooks.PostToolUse ||= []
+  stripZhfixHookEntries(settings, 'PostToolUse')
+
+  // 装新 PreToolUse 条目(matcher 含 NotebookEdit)
+  settings.hooks.PreToolUse ||= []
   const cmdLine = `bash ${toBashPath(HOOK_BASH)}`
+  const MATCHER = 'Write|Edit|MultiEdit|NotebookEdit'
 
   let exists = false
-  for (const entry of settings.hooks.PostToolUse) {
-    if (entry?.matcher === 'Write|Edit|MultiEdit') {
+  for (const entry of settings.hooks.PreToolUse) {
+    if (entry?.matcher === MATCHER) {
       for (const h of entry.hooks || []) {
         if (typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh')) {
-          exists = true
-          break
+          exists = true; break
         }
       }
     }
     if (exists) break
   }
   if (!exists) {
-    settings.hooks.PostToolUse.push({
-      matcher: 'Write|Edit|MultiEdit',
+    settings.hooks.PreToolUse.push({
+      matcher: MATCHER,
       hooks: [{ type: 'command', command: cmdLine }],
     })
   }
@@ -308,7 +330,9 @@ function cmdStatus() {
   const toolOk = existsSync(join(cfg.tool_root, 'zh-fix.mjs'))
   info(`tool 存在:    ${toolOk ? '✅' : '❌ (找不到 zh-fix.mjs)'}`)
   info(`hook 包装:    ${existsSync(HOOK_BASH) ? '✅' : '❌'}`)
-  info(`hook 已注册:  ${checkHookRegistered() ? '✅' : '❌'}`)
+  const reg = checkHookRegistered()
+  info(`PreToolUse 已注册: ${reg.pre ? '✅' : '❌'}${reg.post ? '  ⚠️ 同时检测到旧 PostToolUse 注册,跑 zhfix update 清理' : ''}`)
+  info(`协议版本:    ${cfg.protocol_version || 1}${(cfg.protocol_version || 1) < 2 ? '  ⚠️ 旧协议,跑 zhfix update 升级' : ''}`)
   const cmdPath = getZhfixCmdPath()
   info(`PATH 命令:    ${cmdPath && existsSync(cmdPath) ? '✅' : '❌'}`)
   info('')
@@ -353,17 +377,24 @@ function cmdStatus() {
   }
 }
 
+// 返回 { pre: bool, post: bool };pre=新协议,post=0.1.x 残留(应被 cmdInit 自动清理)
 function checkHookRegistered() {
+  const out = { pre: false, post: false }
   try {
     const s = JSON.parse(readFileSync(SETTINGS_JSON, 'utf-8'))
-    const arr = s?.hooks?.PostToolUse || []
-    for (const e of arr) {
-      for (const h of e.hooks || []) {
-        if (typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh')) return true
+    for (const event of ['PreToolUse', 'PostToolUse']) {
+      const arr = s?.hooks?.[event] || []
+      for (const e of arr) {
+        for (const h of e.hooks || []) {
+          if (typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh')) {
+            if (event === 'PreToolUse') out.pre = true
+            else out.post = true
+          }
+        }
       }
     }
   } catch {}
-  return false
+  return out
 }
 
 // ============================================================================
@@ -398,21 +429,29 @@ function cmdUninstall(args) {
     }
   }
 
-  if (settingsObj && settingsObj?.hooks?.PostToolUse) {
-    const before = JSON.stringify(settingsObj.hooks.PostToolUse)
-    settingsObj.hooks.PostToolUse = settingsObj.hooks.PostToolUse
-      .map(e => ({
-        ...e,
-        hooks: (e.hooks || []).filter(h => !(typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh'))),
-      }))
-      .filter(e => e.hooks && e.hooks.length > 0)
-    if (JSON.stringify(settingsObj.hooks.PostToolUse) !== before) {
-      if (settingsObj.hooks.PostToolUse.length === 0) delete settingsObj.hooks.PostToolUse
+  // 同时扫 PreToolUse(0.2.0+ 主路径)和 PostToolUse(0.1.x 残留)两段
+  if (settingsObj) {
+    let touched = false
+    for (const event of ['PreToolUse', 'PostToolUse']) {
+      if (!settingsObj?.hooks?.[event]) continue
+      const before = JSON.stringify(settingsObj.hooks[event])
+      settingsObj.hooks[event] = settingsObj.hooks[event]
+        .map(e => ({
+          ...e,
+          hooks: (e.hooks || []).filter(h => !(typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh'))),
+        }))
+        .filter(e => e.hooks && e.hooks.length > 0)
+      if (JSON.stringify(settingsObj.hooks[event]) !== before) {
+        if (settingsObj.hooks[event].length === 0) delete settingsObj.hooks[event]
+        touched = true
+        removed.push(`settings.json 里的 ${event}`)
+      }
+    }
+    if (touched) {
       try {
         writeFileSync(SETTINGS_JSON, JSON.stringify(settingsObj, null, 2) + '\n', 'utf-8')
-        removed.push('settings.json 里的 PostToolUse')
       } catch (e) {
-        failedOps.push({ path: SETTINGS_JSON + ' (PostToolUse 段)', error: e.message })
+        failedOps.push({ path: SETTINGS_JSON, error: e.message })
       }
     }
   }

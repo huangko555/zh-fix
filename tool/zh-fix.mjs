@@ -21,6 +21,7 @@
 import { readFileSync, writeFileSync, renameSync, lstatSync, unlinkSync, existsSync, appendFileSync, mkdirSync } from 'node:fs'
 import { extname, dirname, basename, join, resolve, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { formatFor } from 'autocorrect-node'
 import { computeMaskedText } from './mask.mjs'
 import { applySemicolonRule } from './rules/semicolon.mjs'
@@ -28,14 +29,17 @@ import { applyBoundaryRule } from './rules/boundary.mjs'
 import { applyCjkSurroundRule } from './rules/cjk-surround.mjs'
 import { applyAttrTextRule, ATTR_WHITELIST } from './rules/attr-text.mjs'
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024
+export const MAX_FILE_SIZE = 100 * 1024 * 1024
 const TIMEOUT_MS = 8000
-const ALLOWED_EXTS = new Set(['.md', '.markdown', '.html', '.htm'])
+export const ALLOWED_EXTS = new Set(['.md', '.markdown', '.html', '.htm'])
 const LOG_PATH = join(homedir(), '.claude', 'zh-fix.log')
 
-// A4 修:全局兜底超时**永远挂上**(原代码只在 CLI 模式无参数时挂,逻辑反了
-// —— hook 模式现在通过 CLI 调用,带参数,反而拿不到兜底)
-{
+// 是否作为 CLI 直接运行(node tool/zh-fix.mjs <file>)。pre-hook 等 import 本模块时为 false,
+// 此时不挂全局 timeout、不调 main() —— 否则会抢 stdin / 误杀 importer 进程。
+const IS_CLI = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])
+
+// 全局兜底超时(只在 CLI 模式挂;import 模式由 importer 自己管 timeout)
+if (IS_CLI) {
   const t = setTimeout(() => {
     logLine('TIMEOUT (8s exceeded)')
     process.exit(0)
@@ -104,7 +108,7 @@ function checkFile(filePath) {
 // in-process autocorrect:接 string,返回 string
 // A1+A2 修:autocorrect-node 在某些 edge 输入下可能返回 "" 或大幅缩短的内容
 // 拒绝这两种情况,防止把用户原文件清空 / 截断
-function runAutocorrect(filePath, text) {
+export function runAutocorrect(filePath, text) {
   try {
     const result = formatFor(text, filePath)
     const out = typeof result === 'string'
@@ -128,7 +132,7 @@ function runAutocorrect(filePath, text) {
   }
 }
 
-function hasOptOut(text) {
+export function hasOptOut(text) {
   const head = text.slice(0, 200)
   return /<!--\s*zh-fix:\s*off\s*-->/.test(head) || /^\s*<!--\s*zh-fix\s+disabled\s*-->/m.test(head)
 }
@@ -191,13 +195,22 @@ function restoreNonWhitelistAttrs(original, afterAc) {
   })
 }
 
-function restoreSkipRegions(original, afterAc) {
+export function restoreSkipRegions(original, afterAc) {
   let out = restoreByOrder(original, afterAc, ALWAYS_RESTORE_RE, 'blocks')
   out = restoreNonWhitelistAttrs(original, out)
   return out
 }
 
-function applyPatches(text) {
+// 便利包装:整套 zh-fix 管道(autocorrect → 回填跳过区 → 应用补丁规则)。
+// 接 text 返回 text;ac 失败时返回原文不变(沿用 CLI main 的"出错放行"哲学)。
+export function applyPipeline(filePath, text) {
+  const acRes = runAutocorrect(filePath, text)
+  if (!acRes.ok) return text
+  const afterAc = restoreSkipRegions(text, acRes.text)
+  return applyPatches(afterAc)
+}
+
+export function applyPatches(text) {
   const masked = computeMaskedText(text)
   let t = text
   t = applySemicolonRule(t, masked)
@@ -316,7 +329,9 @@ async function main() {
   process.exit(0)
 }
 
-main().catch((e) => {
-  logLine(`UNHANDLED: ${e.message}`)
-  process.exit(0)
-})
+if (IS_CLI) {
+  main().catch((e) => {
+    logLine(`UNHANDLED: ${e.message}`)
+    process.exit(0)
+  })
+}

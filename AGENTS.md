@@ -1,6 +1,6 @@
 # 安装指南 (给 AI Agent 看)
 
-你正在帮一位用户安装 zhfix。这是一个 Claude Code PostToolUse hook 工具，自动把中文文档里的半角标点修正成全角。
+你正在帮一位用户安装 zhfix。这是一个 Claude Code PreToolUse hook 工具（0.2.0+），在 Claude 写盘前把中文文档里的半角标点修正成全角，让"Claude 写下去的 = 磁盘最终内容 = 模型 context 可见的 updatedInput"。
 
 ## 装之前先检查这几项 (Pre-flight)
 
@@ -12,7 +12,7 @@
 | npm 可用 | `npm --version` | "npm 没装好，检查 Node 安装" |
 | Git Bash(仅 Windows)| Windows 上 `bash --version`；非 Win 跳过 | "Windows 上 hook 需要 Git Bash（不是 WSL 的 bash），请装 Git for Windows (https://git-scm.com/download/win)" |
 | Claude Code 已装 | 看 `~/.claude/` 目录是否预先存在 | "没检测到 Claude Code(`~/.claude/` 不存在)。zhfix 是给 Claude Code 用的 hook，没装 Claude Code 这工具不会触发。建议先装好 Claude Code，或确认你确实要继续 (我们仍会装，但 hook 不会自动跑)。" |
-| 平台 prebuilt 支持 | 看 platform/arch | autocorrect-node 当前 prebuilt 覆盖:Win-x64、macOS-x64、macOS-arm64、Linux-x64-gnu。**不覆盖 Linux musl(Alpine)、Linux arm64、Windows arm64**。那些用户 `npm i -g zhfix` 会失败，提示他们装 Rust 工具链自己编或换镜像 |
+| 平台 prebuilt 支持 | 看 platform/arch | autocorrect-node 当前 prebuilt 覆盖：Win-x64、macOS-x64、macOS-arm64、Linux-x64-gnu。**不覆盖 Linux musl(Alpine)、Linux arm64、Windows arm64**。那些用户 `npm i -g zhfix` 会失败，提示他们装 Rust 工具链自己编或换镜像 |
 
 ## 安装 (两条命令)
 
@@ -24,14 +24,14 @@ zhfix install      # 接入 Claude Code
 `zhfix install` 做了什么：
 
 1. 定位包自身的 `tool/`(全局 node_modules 内)，写进 `~/.zhfix/config.json`
-2. 写 `~/.claude/hooks/zh-fix-auto.sh`(bash 包装，直接指向包内 `hook.mjs`，npm 升级后自动跟随)
-3. 把 PostToolUse hook merge 进 `~/.claude/settings.json`(已有就不重复)
+2. 写 `~/.claude/hooks/zh-fix-auto.sh`(bash 包装，直接指向包内 `pre-hook.mjs`，npm 升级后自动跟随)
+3. 把 PreToolUse hook merge 进 `~/.claude/settings.json`(已有就不重复；同时清掉 0.1.x 残留的 PostToolUse 注册)
 4. 装 `/zhfix` skill 到 `~/.claude/skills/zhfix/`
 
 > `zhfix` 命令由 npm 在 `npm i -g` 时自动挂到全局 bin(PATH 已有)，不用手动配。
 > `tool/zh-fix.mjs` 通过 `import { formatFor } from 'autocorrect-node'` **in-process** 调用 autocorrect，不再 spawn 子进程。autocorrect-node 作为 npm 依赖声明在 `package.json`，随 zhfix 包一起从 npm 下载，不打包源码。
 >
-> 开发者想从 repo 本地装(改代码时)：repo 根目录 `node install/install.mjs`，再 `npm link` 拿到全局命令。
+> 开发者想从 repo 本地装 (改代码时)：repo 根目录 `node install/install.mjs`，再 `npm link` 拿到全局命令。
 
 ## 验证
 
@@ -45,7 +45,7 @@ zhfix status
 
 `zhfix install` 跑完会自己打印一段"使用说明"。你**必须把这段内容转述给用户**(可以引用，可以改写，但核心点都要传达)。用户不会主动去看终端输出。
 
-要确保传达到用户的几点 (直接说，不要用复杂术语):
+要确保传达到用户的几点 (直接说，不要用复杂术语)：
 
 ### 1. 装好了，什么都不用做
 
@@ -60,19 +60,19 @@ zhfix status
 | 命令 | 干啥 |
 |---|---|
 | `zhfix status` | 看 hook 是否启用 + 当前目录是否暂停 + 今日活动统计 |
-| `zhfix pause` | 当前目录不想被处理 (英文文档 / 代码示例等),`cd` 过去再跑这条 |
-| `zhfix resume` | 恢复当前目录的自动处理(撤销之前的 `zhfix pause`) |
+| `zhfix pause` | 当前目录不想被处理 (英文文档 / 代码示例等)，`cd` 过去再跑这条 |
+| `zhfix resume` | 恢复当前目录的自动处理 (撤销之前的 `zhfix pause`) |
 | `zhfix restore <文件>` | 把指定文件还原到 /zhfix 改之前的备份 |
-| `zhfix uninstall` | 卸载接入(删本体再 `npm uninstall -g zhfix`) |
+| `zhfix uninstall` | 卸载接入 (删本体再 `npm uninstall -g zhfix`) |
 
-### 4. Claude Code 斜杠命令(改单个已有文档)
+### 4. Claude Code 斜杠命令 (改单个已有文档)
 
 `/zhfix <文件>` —— 把单个 `.md/.html` 文件用 zh-fix 规则改一遍标点。
-也可以自然语言触发,例如:**"帮我把 prd.md 改成中文标点"**、**"改一下 docs/api.md 的半角逗号"**。
+也可以自然语言触发，例如：**"帮我把 prd.md 改成中文标点"**、**"改一下 docs/api.md 的半角逗号"**。
 
-- 改前自动备份到 `~/.zhfix/backups/`,事后用 `zhfix restore` 还原
-- 必须指定单个文件,不接受目录或批量
-- 必须明确提到"标点 / 全角 / 半角 / 逗号 / 句号" 等关键词才主动触发(避免对"改一下"这种泛改请求误触发)
+- 改前自动备份到 `~/.zhfix/backups/`，事后用 `zhfix restore` 还原
+- 必须指定单个文件，不接受目录或批量
+- 必须明确提到"标点 / 全角 / 半角 / 逗号 / 句号" 等关键词才主动触发 (避免对"改一下"这种泛改请求误触发)
 
 ### 5. 出问题怎么办
 
@@ -81,7 +81,7 @@ zhfix status
 
 ### 6. **提醒用户重启 Claude Code**
 
-不重启 hook 不生效,`/zhfix` skill 也是。这是装完唯一需要他做的事。
+不重启 hook 不生效，`/zhfix` skill 也是。这是装完唯一需要他做的事。
 
 ## 常见问题
 
@@ -108,7 +108,7 @@ npm prefix -g    # 看路径
 echo $PATH       # 确认这个路径(Windows 上是这个路径本身;Linux/Mac 是它下面的 bin/)在内
 ```
 
-不在的话，重开终端再试(装完 PATH 没刷新);还不行就把 npm 全局 bin 加到 PATH。
+不在的话，重开终端再试 (装完 PATH 没刷新)；还不行就把 npm 全局 bin 加到 PATH。
 
 ### Claude Code hook 不触发
 
@@ -116,7 +116,7 @@ echo $PATH       # 确认这个路径(Windows 上是这个路径本身;Linux/Mac
 2. `zhfix status` 看 "hook 已注册" 是不是 ✅
 3. 看 `~/.claude/zh-fix.log` 有没有日志写入
 
-### 卸装(两步)
+### 卸装 (两步)
 
 ```bash
 zhfix uninstall            # ① 清接入:settings hook、bash 包装、~/.zhfix/、/zhfix skill
@@ -126,15 +126,15 @@ npm uninstall -g zhfix     # ② 删本体:zhfix 命令 + tool 源 + autocorrect
 先 ① 再 ②——卸了本体 `zhfix` 命令就没了。
 
 `zhfix uninstall` 会清掉：
-- `settings.json` 里的 PostToolUse hook
+- `settings.json` 里的 PreToolUse hook(同时清掉 0.1.x 残留的 PostToolUse)
 - `~/.claude/hooks/zh-fix-auto.sh`
-- `~/.zhfix/` 整个目录(config + backups)
+- `~/.zhfix/` 整个目录 (config + backups)
 - `/zhfix` skill
 
-默认保留 `~/.claude/zh-fix.log`(历史日志);加 `--all` 连日志和 settings 备份一起清。
+默认保留 `~/.claude/zh-fix.log`(历史日志)；加 `--all` 连日志和 settings 备份一起清。
 backups 默认搬到 `~/.zhfix-backups-saved-*` 保留，加 `--purge-backups` 才一并删。
 
-`npm uninstall -g zhfix` 删掉包本体(命令 + tool 源 + autocorrect 依赖)。
+`npm uninstall -g zhfix` 删掉包本体 (命令 + tool 源 + autocorrect 依赖)。
 
 ## 你不需要做的事
 

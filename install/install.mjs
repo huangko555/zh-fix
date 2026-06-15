@@ -103,7 +103,7 @@ if (existsSync(acLocal)) {
 }
 
 // 3. 接入 Claude Code:调 cli.mjs 的 install 流程
-//    cli.mjs 自己会写 config、把 hook.mjs 复制进 ~/.zhfix、配 settings hook、装 skill,
+//    cli.mjs 自己会写 config、bash wrapper 指向包内 pre-hook.mjs、配 settings hook、装 skill,
 //    并定位到 repo 自身的 tool/(传 TOOL_ROOT)。命令本体由 npm / npm link 提供,这里不再手动复制 cli.mjs。
 info('')
 const initRes = spawnSync('node', [join(INSTALL_DIR, 'cli.mjs'), 'install', TOOL_ROOT], {
