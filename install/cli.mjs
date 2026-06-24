@@ -7,7 +7,7 @@
 process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.code !== 'DEP0190') console.warn(w) })
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, chmodSync, readdirSync, statSync, appendFileSync, renameSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, unlinkSync, rmSync, readdirSync, statSync, appendFileSync, renameSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
@@ -54,7 +54,6 @@ const SKILL_DIR = join(HOME, '.claude', 'skills', 'zhfix')
 // 不写死任何机器路径,靠 import.meta.url 让包自己定位自己。
 const PKG_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const PKG_TOOL = join(PKG_ROOT, 'tool')
-const PKG_HOOK_SRC = join(PKG_ROOT, 'install', 'pre-hook.mjs')
 const PKG_SKILL_SRC = join(PKG_ROOT, 'skills', 'zhfix', 'SKILL.md')
 
 // PATH 安装位置:用 npm 全局 bin(已经在 PATH 里)
@@ -82,12 +81,6 @@ function normalizePath(p) {
   return String(p).replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
-// Windows 绝对路径 → Git Bash 风格(C:\foo → /c/foo)
-function toBashPath(p) {
-  if (!IS_WIN) return p
-  return '/' + p.replace(/^([A-Za-z]):/, (_, d) => d.toLowerCase()).replace(/\\/g, '/')
-}
-
 function info(msg) { process.stdout.write(msg + '\n') }
 function warn(msg) { process.stderr.write('⚠️  ' + msg + '\n') }
 function fail(msg) { process.stderr.write('❌ ' + msg + '\n'); process.exit(1) }
@@ -95,6 +88,8 @@ function ok(msg)   { process.stdout.write('✅ ' + msg + '\n') }
 
 // ============================================================================
 // zhfix init [tool-path]
+// 0.3.0+:不再注入任何 hook。只装 /zhfix skill + 写 config(给 skill 用)。
+// 同时清掉 0.1.x/0.2.0 残留的 hook 注册和 bash wrapper(从老版本升级时的自动迁移)。
 // ============================================================================
 function cmdInit(args) {
   const arg = args[0]
@@ -105,8 +100,7 @@ function cmdInit(args) {
     fail(`找不到 zh-fix.mjs 在: ${toolRoot}\n用法: zhfix init [tool 目录]`)
   }
 
-  // C1+C2 修:在写任何文件前,**先 validate** settings.json 可解析且是 object
-  // 这样如果 settings 坏了,不会留下半装状态(node_modules + cli.mjs + bash hook 已落地但 settings 没注册)
+  // 在写任何文件前,先 validate settings.json 可解析且是 object,避免半装状态
   if (existsSync(SETTINGS_JSON)) {
     let s
     try {
@@ -120,45 +114,19 @@ function cmdInit(args) {
     }
   }
 
-  const existing = readConfig() || {}
-  const cfg = {
-    tool_root: normalizePath(toolRoot),
-    paused_paths: existing.paused_paths || [],
-    version: 1,
-    protocol_version: 2,  // 2 = PreToolUse(0.2.0+);1 = PostToolUse(0.1.x,已淘汰)
-  }
-  writeConfig(cfg)
+  // 写 config(仅 tool_root,/zhfix skill 用它定位 zh-fix.mjs)
+  // 旧字段 paused_paths / protocol_version 自动清理(0.3.0 起 hook 没了,这俩没意义)
+  writeConfig({ tool_root: normalizePath(toolRoot), version: 1 })
   ok(`config 已写: ${CONFIG_PATH}`)
-  ok(`  tool_root = ${cfg.tool_root}`)
+  ok(`  tool_root = ${normalizePath(toolRoot)}`)
 
-  // bash hook 直接指向包内 pre-hook.mjs(0.2.0+;0.1.x 是 hook.mjs)。随 npm 升级自动跟随。
-  if (!existsSync(PKG_HOOK_SRC)) {
-    fail(`找不到 hook 路由源 ${PKG_HOOK_SRC}(包不完整?)`)
+  // 清旧 hook 注册(0.1.x PostToolUse / 0.2.0 PreToolUse 两段都扫)+ 删 bash wrapper 文件
+  const cleaned = cleanupLegacyHooks()
+  if (cleaned.length > 0) {
+    ok(`迁移:清理旧版残留 ${cleaned.join(', ')}`)
   }
-  const routerBash = toBashPath(PKG_HOOK_SRC)
 
-  const hookDir = dirname(HOOK_BASH)
-  if (!existsSync(hookDir)) mkdirSync(hookDir, { recursive: true })
-  // 标准 stdout 必须保留(PreToolUse 用 stdout 输出 hookSpecificOutput);只把 stderr 吃掉防污染
-  const bashContent = `#!/usr/bin/env bash
-# zh-fix-auto.sh - 由 zhfix init 生成,不要手改
-# 把 PreToolUse 的 stdin 喂给包内 pre-hook.mjs,它的 stdout 是 hookSpecificOutput JSON
-ROUTER="${routerBash}"
-[ ! -f "$ROUTER" ] && exit 0
-cat | node "$ROUTER" 2>/dev/null
-exit 0
-`
-  writeFileSync(HOOK_BASH, bashContent, 'utf-8')
-  if (!IS_WIN) { try { chmodSync(HOOK_BASH, 0o755) } catch {} }
-  ok(`bash hook: ${HOOK_BASH}`)
-
-  // 迁移 + 装:先清掉 0.1.x 残留的 PostToolUse zh-fix 条目,再装 PreToolUse
-  installPreToolUseHook()
-  ok(`settings.json PreToolUse 已配(0.1.x PostToolUse 注册已自动清理)`)
-
-  // zhfix 命令由 npm bin 提供(npm i -g zhfix 时自动挂到 PATH),这里不再手写 shim
-
-  // 装 /zhfix skill 到 ~/.claude/skills/zhfix/(从包内取)
+  // 装 /zhfix skill 到 ~/.claude/skills/zhfix/
   const skillSrc = PKG_SKILL_SRC
   if (existsSync(skillSrc)) {
     if (!existsSync(SKILL_DIR)) mkdirSync(SKILL_DIR, { recursive: true })
@@ -169,36 +137,49 @@ exit 0
   }
 
   info('')
-  info('🎉 安装完成。重启 Claude Code 让 hook 和 /zhfix 命令都生效。')
-  info('   测试:zhfix status')
+  info('🎉 安装完成。重启 Claude Code 让 /zhfix skill 生效。')
+  info('   用法:在 Claude Code 里说 "/zhfix <文件路径>" 或 "把 prd.md 改成中文标点"')
+}
+
+// 清理旧版本(0.1.x / 0.2.0)残留:settings.json hook 注册 + bash wrapper 文件。
+// 返回清掉的项目名列表(用于日志)。
+function cleanupLegacyHooks() {
+  const cleaned = []
+  // 1. settings.json:扫 PreToolUse + PostToolUse,删 zh-fix-auto.sh 条目
+  if (existsSync(SETTINGS_JSON)) {
+    try {
+      const s = JSON.parse(readFileSync(SETTINGS_JSON, 'utf-8'))
+      let touched = false
+      for (const event of ['PreToolUse', 'PostToolUse']) {
+        if (stripZhfixHookEntries(s, event)) {
+          touched = true
+          cleaned.push(`settings.json ${event}`)
+        }
+      }
+      if (touched) {
+        // 备份带时间戳
+        try { copyFileSync(SETTINGS_JSON, `${SETTINGS_JSON}.bak.${makeTimestamp()}`) } catch {}
+        writeFileSync(SETTINGS_JSON, JSON.stringify(s, null, 2) + '\n', 'utf-8')
+      }
+    } catch {}
+  }
+  // 2. bash wrapper 文件
+  if (existsSync(HOOK_BASH)) {
+    try { unlinkSync(HOOK_BASH); cleaned.push('zh-fix-auto.sh') } catch {}
+  }
+  return cleaned
 }
 
 // ============================================================================
 // zhfix install — 首次接入 Claude Code(npm i -g zhfix 之后跑这个)
-// = preflight + init(自动用包内 tool) + 一段使用说明
+// 0.3.0+:= init + 使用说明。不再装 hook,只装 /zhfix skill。
 // ============================================================================
 function cmdInstall(args) {
-  // Windows 上 bash hook 强依赖 Git Bash,先探测。
-  // 要排除 WSL 的 System32\bash.exe —— 它把盘符当 /mnt/c,跟我们写的 /c/... hook 路径不兼容
-  if (IS_WIN) {
-    const bashCheck = spawnSync('cmd.exe', ['/d', '/s', '/c', 'where', 'bash'], { encoding: 'utf-8', shell: false })
-    const bashPaths = (bashCheck.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-    const gitBash = bashPaths.find(p => !/\\System32\\bash\.exe$/i.test(p))
-    if (!gitBash) {
-      fail(bashPaths.length > 0
-        ? `检测到的 bash 是 WSL 的(System32\\bash.exe),它的路径风格(/mnt/c/...)跟 hook 用的 Git Bash(/c/...)不兼容。
-请装 Git for Windows:https://git-scm.com/download/win
-装完重开终端再跑 zhfix install。`
-        : `Windows 上 hook 需要 bash(Git for Windows 自带),没检测到。
-请先装 Git for Windows:https://git-scm.com/download/win
-装完重开终端再跑 zhfix install。`)
-    }
-  }
   // Claude Code 装没装(看 ~/.claude/ 在不在)
   if (!existsSync(join(HOME, '.claude'))) {
     warn(`没检测到 Claude Code(${join(HOME, '.claude')} 不存在)。`)
-    warn(`zhfix 是给 Claude Code 用的 hook,没装 Claude Code 这工具不会自动触发——`)
-    warn(`仍会继续配置,hook 只在 Claude Code 装好并重启后才生效。`)
+    warn(`zhfix 的 /zhfix skill 是给 Claude Code 用的,没装 Claude Code 不会触发——`)
+    warn(`仍会继续配置,skill 只在 Claude Code 装好并重启后才生效。`)
   }
 
   cmdInit(args)
@@ -206,17 +187,18 @@ function cmdInstall(args) {
   info('')
   info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   info('【接下来怎么用】')
-  info('  你什么都不用做。重启 Claude Code 后正常用 ——')
-  info('  Claude 每次写完 .md / .html,工具会在后台把中文段落里的')
-  info('  半角标点改成全角。')
+  info('  重启 Claude Code 后,在 Claude 里这样说:')
   info('')
-  info('  写入:  你好,世界.带边界(英文).')
-  info('  落盘:  你好，世界。带边界 (英文)。')
+  info('    /zhfix prd.md')
+  info('    或:把 prd.md 改成中文标点')
+  info('')
+  info('  Claude 会调 /zhfix skill,用 zh-fix 规则改单个 .md / .html 文件,')
+  info('  改前自动备份。不满意可以 zhfix restore <文件> 还原。')
   info('')
   info('【常用命令】')
-  info('  zhfix status     看 hook 是否启用 + 当前目录是否暂停 + 今日活动')
-  info('  zhfix pause      当前目录不想被处理(英文文档 / 代码示例)')
-  info('  zhfix resume     恢复处理')
+  info('  zhfix status     看 skill 是否装好 + 今日活动')
+  info('  zhfix restore <文件>   还原文件到上次 /zhfix 改之前的备份')
+  info('  zhfix update     升级到 npm 最新版并刷新接入(清旧 hook 残留)')
   info('  zhfix uninstall  卸载接入(之后再 npm uninstall -g zhfix 删本体)')
   info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 }
@@ -237,83 +219,7 @@ function stripZhfixHookEntries(settings, event) {
   return JSON.stringify(settings?.hooks?.[event] ?? []) !== before
 }
 
-function installPreToolUseHook() {
-  let settings = {}
-  if (existsSync(SETTINGS_JSON)) {
-    // 备份带时间戳,避免重跑 init 时覆盖之前的备份
-    const stamp = makeTimestamp()
-    try { copyFileSync(SETTINGS_JSON, `${SETTINGS_JSON}.bak.${stamp}`) } catch {}
-    try { settings = JSON.parse(readFileSync(SETTINGS_JSON, 'utf-8')) } catch {
-      fail(`settings.json 解析失败,请先手动修复: ${SETTINGS_JSON}`)
-    }
-    if (typeof settings !== 'object' || Array.isArray(settings) || settings === null) {
-      fail(`settings.json 必须是 JSON 对象(当前是 ${Array.isArray(settings) ? 'array' : typeof settings}),无法 merge hook。请检查 ${SETTINGS_JSON}`)
-    }
-  } else {
-    const sdir = dirname(SETTINGS_JSON)
-    if (!existsSync(sdir)) mkdirSync(sdir, { recursive: true })
-  }
-
-  // 0.2.0 迁移:先清掉 0.1.x 残留的 PostToolUse zh-fix 注册(同 wrapper 路径,避免双挂)
-  settings.hooks ||= {}
-  stripZhfixHookEntries(settings, 'PostToolUse')
-
-  // 装新 PreToolUse 条目(matcher 含 NotebookEdit)
-  settings.hooks.PreToolUse ||= []
-  const cmdLine = `bash ${toBashPath(HOOK_BASH)}`
-  const MATCHER = 'Write|Edit|MultiEdit|NotebookEdit'
-
-  let exists = false
-  for (const entry of settings.hooks.PreToolUse) {
-    if (entry?.matcher === MATCHER) {
-      for (const h of entry.hooks || []) {
-        if (typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh')) {
-          exists = true; break
-        }
-      }
-    }
-    if (exists) break
-  }
-  if (!exists) {
-    settings.hooks.PreToolUse.push({
-      matcher: MATCHER,
-      hooks: [{ type: 'command', command: cmdLine }],
-    })
-  }
-  writeFileSync(SETTINGS_JSON, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
-}
-
-// ============================================================================
-// zhfix pause / resume
-// ============================================================================
-function cmdPause() {
-  const cfg = readConfig()
-  if (!cfg) fail(`未配置。先运行 zhfix init`)
-  const cwd = normalizePath(process.cwd())
-  cfg.paused_paths ||= []
-  if (cfg.paused_paths.some(p => normalizePath(p).toLowerCase() === cwd.toLowerCase())) {
-    info(`此路径已暂停:${cwd}`)
-    return
-  }
-  cfg.paused_paths.push(cwd)
-  writeConfig(cfg)
-  ok(`暂停:${cwd}`)
-  info(`(及其所有子目录,Claude 写文件时会跳过)`)
-}
-
-function cmdResume() {
-  const cfg = readConfig()
-  if (!cfg) fail(`未配置。先运行 zhfix init`)
-  const cwd = normalizePath(process.cwd())
-  const before = cfg.paused_paths?.length || 0
-  cfg.paused_paths = (cfg.paused_paths || []).filter(p => normalizePath(p).toLowerCase() !== cwd.toLowerCase())
-  if (cfg.paused_paths.length === before) {
-    info(`此路径并未在暂停列表里:${cwd}`)
-    return
-  }
-  writeConfig(cfg)
-  ok(`恢复:${cwd}`)
-}
+// (0.3.0 删:installPreToolUseHook + cmdPause + cmdResume —— hook 和 paused_paths 都不再有)
 
 // ============================================================================
 // zhfix status
@@ -329,32 +235,16 @@ function cmdStatus() {
   info(`tool_root:    ${cfg.tool_root}`)
   const toolOk = existsSync(join(cfg.tool_root, 'zh-fix.mjs'))
   info(`tool 存在:    ${toolOk ? '✅' : '❌ (找不到 zh-fix.mjs)'}`)
-  info(`hook 包装:    ${existsSync(HOOK_BASH) ? '✅' : '❌'}`)
-  const reg = checkHookRegistered()
-  info(`PreToolUse 已注册: ${reg.pre ? '✅' : '❌'}${reg.post ? '  ⚠️ 同时检测到旧 PostToolUse 注册,跑 zhfix update 清理' : ''}`)
-  info(`协议版本:    ${cfg.protocol_version || 1}${(cfg.protocol_version || 1) < 2 ? '  ⚠️ 旧协议,跑 zhfix update 升级' : ''}`)
+  info(`skill 已装:   ${existsSync(join(SKILL_DIR, 'SKILL.md')) ? '✅' : '❌'}`)
   const cmdPath = getZhfixCmdPath()
   info(`PATH 命令:    ${cmdPath && existsSync(cmdPath) ? '✅' : '❌'}`)
-  info('')
-  info(`暂停的路径(${cfg.paused_paths?.length || 0} 个):`)
-  if (!cfg.paused_paths || cfg.paused_paths.length === 0) {
-    info('  (无)')
-  } else {
-    const cwd = normalizePath(process.cwd()).toLowerCase()
-    cfg.paused_paths.forEach(p => {
-      const np = normalizePath(p).toLowerCase()
-      const here = np === cwd ? ' ← 当前所在' : ''
-      info('  - ' + p + here)
-    })
+  // 升级提示:检测旧版残留(自 0.3.0 起 hook 已完全拆除)
+  const legacy = checkLegacyResidue()
+  if (legacy.length > 0) {
+    info('')
+    warn(`检测到旧版残留:${legacy.join(', ')}`)
+    warn(`跑 \`zhfix update\` 或 \`zhfix init\` 自动清理`)
   }
-  info('')
-
-  const cwd = normalizePath(process.cwd()).toLowerCase()
-  const cwdPaused = (cfg.paused_paths || []).some(p => {
-    const np = normalizePath(p).toLowerCase()
-    return cwd === np || cwd.startsWith(np + '/')
-  })
-  info(`当前路径状态:${cwdPaused ? '🛑 暂停中' : '✅ 启用'}`)
   info('')
 
   if (existsSync(LOG_PATH)) {
@@ -377,9 +267,10 @@ function cmdStatus() {
   }
 }
 
-// 返回 { pre: bool, post: bool };pre=新协议,post=0.1.x 残留(应被 cmdInit 自动清理)
-function checkHookRegistered() {
-  const out = { pre: false, post: false }
+// 0.3.0:hook 已完全拆除。检测是否还有旧版残留(0.1.x PostToolUse / 0.2.0 PreToolUse 注册、bash wrapper 文件)
+// 返回残留项目名列表;空数组表示干净
+function checkLegacyResidue() {
+  const residue = []
   try {
     const s = JSON.parse(readFileSync(SETTINGS_JSON, 'utf-8'))
     for (const event of ['PreToolUse', 'PostToolUse']) {
@@ -387,14 +278,15 @@ function checkHookRegistered() {
       for (const e of arr) {
         for (const h of e.hooks || []) {
           if (typeof h?.command === 'string' && h.command.includes('zh-fix-auto.sh')) {
-            if (event === 'PreToolUse') out.pre = true
-            else out.post = true
+            residue.push(`settings.json ${event}`)
+            break
           }
         }
       }
     }
   } catch {}
-  return out
+  if (existsSync(HOOK_BASH)) residue.push('zh-fix-auto.sh')
+  return [...new Set(residue)]
 }
 
 // ============================================================================
@@ -681,9 +573,9 @@ function cmdClearBackups(args) {
 
 // ============================================================================
 // zhfix update
-// 把全局 zhfix 升到 npm 最新版,再用新代码重新接入(刷新 hook/settings/skill)。
-//   - config.tool_root 和 hook 包装都指向"包内稳定路径",随 npm 升级自动跟随;
-//   - 但 /zhfix skill 是装时拷到 ~/.claude/skills/ 的副本,npm 升级不会动它 —— 必须重接入才更新。
+// 升级 npm 包到最新,再跑 init 刷新接入。
+// 0.3.0+:init 不再注入 hook,而是清掉 0.1.x/0.2.0 残留的 hook 注册 + bash wrapper +
+// 旧 config 字段(paused_paths / protocol_version)。从老版本升上来跑 update 一次即可彻底干净。
 // ============================================================================
 function runNpm(npmArgs) {
   return IS_WIN
@@ -716,10 +608,10 @@ function cmdUpdate() {
   }
   ok('npm 包已升到最新版')
 
-  // 用升级后的新 cli 重新接入,刷新 hook 包装 / settings / skill 副本 / config。
+  // 用升级后的新 cli 重新接入:写 config / 装 skill / 清旧 hook 残留。
   // 开发模式下把原 tool_root 传回去,避免被重置。
   info('')
-  info('正在刷新 Claude Code 接入(hook / settings / skill)...')
+  info('正在刷新接入(写 config / 装 skill / 清旧 hook 残留)...')
   const initArgs = devToolRoot ? ['init', devToolRoot] : ['init']
   const re = runZhfix(initArgs)
   if (re.status !== 0) {
@@ -728,7 +620,7 @@ function cmdUpdate() {
 
   info('')
   ok('更新完成。')
-  info('⚠️  重启 Claude Code,让新版 hook 和 /zhfix skill 生效。')
+  info('⚠️  重启 Claude Code,让新版 /zhfix skill 生效。')
 }
 
 // ============================================================================
@@ -747,37 +639,33 @@ function cmdVersion() {
 // zhfix help
 // ============================================================================
 function cmdHelp() {
-  info(`zhfix - 中文标点自动修正工具
+  info(`zhfix - 中文标点修正工具(0.3.0+:只保留 /zhfix skill,不再有自动 hook)
 
 用法:
-  zhfix install                首次接入 Claude Code(npm i -g zhfix 之后跑这个)
-  zhfix init [tool 路径]       重新绑定 / 修复配置;tool 路径默认为包自身
-  zhfix pause                  暂停当前目录(及子目录)
-  zhfix resume                 恢复当前目录的自动处理(撤销之前的 zhfix pause)
-  zhfix status                 查看 hook 是否启用 + 当前目录是否暂停 + 今日活动
+  zhfix install                首次接入 Claude Code(npm i -g zhfix 之后跑这个);
+                               装 /zhfix skill + 写 config
+  zhfix init [tool 路径]       重新绑定 / 修复配置;同时清理旧版残留(0.1.x/0.2.0 的 hook)
+  zhfix status                 查看 skill 是否装好 + 是否有旧版残留 + 今日活动
   zhfix restore <文件>         还原指定文件到最近的备份(由 /zhfix skill 改之前生成)
   zhfix clear-backups [--yes]  清掉所有备份文件
-  zhfix uninstall [--all]      卸载接入(hook/config/skill);默认 backups 搬到 ~/.zhfix-backups-saved-* 保留
+  zhfix uninstall [--all]      卸载接入(config/skill + 清旧 hook 残留)
                                --all 一并清日志和 settings 备份
                                --purge-backups 备份也一并清掉(慎用)
                                删 zhfix 本体另跑:npm uninstall -g zhfix
-  zhfix update                 升级到 npm 最新版并刷新接入(hook/settings/skill),之后重启 Claude Code
+  zhfix update                 升级到 npm 最新版并刷新接入(自动清旧 hook 残留)
   zhfix version                查看当前版本号
   zhfix help                   本帮助
 
 Claude Code 命令(装好后斜杠触发):
   /zhfix <文件>            把单个 .md/.html 文件用 zh-fix 规则改标点
-                          (备份再改,可用 zhfix restore 还原)
+                          (改前自动备份,可用 zhfix restore 还原)
 
 配置:
-  ~/.zhfix/config.json     tool_root + paused_paths
+  ~/.zhfix/config.json     tool_root
   ~/.zhfix/backups/        skill 改文件前的备份
 
 日志:
-  ~/.claude/zh-fix.log     每次 hook 跑都记一行
-
-紧急关闭:
-  看 tool/EMERGENCY-OFF.md
+  ~/.claude/zh-fix.log     每次 /zhfix 跑都记一行
 `)
 }
 
@@ -785,8 +673,6 @@ const [, , cmd, ...rest] = process.argv
 switch ((cmd || 'help').toLowerCase()) {
   case 'install':    cmdInstall(rest); break
   case 'init':       cmdInit(rest); break
-  case 'pause':      cmdPause(); break
-  case 'resume':     cmdResume(); break
   case 'status':     cmdStatus(); break
   case 'restore':    cmdRestore(rest); break
   case 'clear-backups':
@@ -800,6 +686,11 @@ switch ((cmd || 'help').toLowerCase()) {
   case 'help':
   case '--help':
   case '-h':         cmdHelp(); break
+  case 'pause':
+  case 'resume':
+    warn(`0.3.0 起 zhfix 不再有自动 hook,${cmd} 命令已删除。`)
+    info(`旧版的 hook 残留可以跑 'zhfix update' 或 'zhfix init' 自动清理。`)
+    process.exit(1)
   default:
     warn(`未知命令:${cmd}`)
     cmdHelp()
